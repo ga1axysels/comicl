@@ -458,9 +458,27 @@ function clearPanel() {
    ========================================================= */
 const PLAIN = (() => { const d = document.createElement('div'); d.contentEditable = 'plaintext-only'; return d.contentEditable === 'plaintext-only'; })();
 
+// Text size (as % of the panel) grows and shrinks with the box.
+function bubbleFont(b) {
+  const s = SHAPES[b.type];
+  return clamp(4.2 * Math.sqrt((b.w / s.w) * (b.h / s.h)), 1.6, 16);
+}
+const FLIPPABLE = { speech: 1, thought: 1, shout: 1 };
+
 function placeBubble(n, b) {
   n.style.left = b.x + '%'; n.style.top = b.y + '%';
   n.style.width = b.w + '%'; n.style.height = b.h + '%';
+  const s = SHAPES[b.type];
+  const shape = n.querySelector(':scope > svg');
+  if (shape) shape.style.transform = b.flip ? 'scaleX(-1)' : '';
+  const t = n.querySelector('.btext');
+  if (t) {
+    const [il, it, ir, ib] = s.inset;
+    Object.assign(t.style, {
+      left: (b.flip ? ir : il) + '%', right: (b.flip ? il : ir) + '%', top: it + '%', bottom: ib + '%',
+      fontSize: `calc(var(--canvas) * ${(bubbleFont(b) / 100).toFixed(4)})`,
+    });
+  }
 }
 
 function snapEdge(b) {
@@ -510,22 +528,27 @@ function bubbleEl(p, b) {
   const s = SHAPES[b.type];
   const n = el('div', 'bubble');
   n.dataset.id = b.id;
-  placeBubble(n, b);
   n.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${s.d}"/></svg>
     <div class="btext" spellcheck="false" data-ph="Type…"></div>
     <button class="b-del" aria-label="Delete bubble">×</button>
+    ${FLIPPABLE[b.type] ? '<button class="b-flip" aria-label="Flip bubble" title="Flip"><svg viewBox="0 0 24 24"><path d="M10 5L3 19h7z"/><path d="M14 5l7 14h-7z" style="fill:#1d1b18"/></svg></button>' : ''}
     <span class="b-move" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></span>
-    <span class="b-size" aria-hidden="true"></span>`;
+    ${['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(d => `<span class="rz rz-${d}" data-dir="${d}" aria-hidden="true"></span>`).join('')}`;
   const t = $('.btext', n);
   t.contentEditable = PLAIN ? 'plaintext-only' : 'true';
-  const [il, it, ir, ib] = s.inset;
-  Object.assign(t.style, { left: il + '%', top: it + '%', right: ir + '%', bottom: ib + '%' });
   t.textContent = b.text;
+  placeBubble(n, b);
 
   let before = b.text;
   t.addEventListener('focus', () => { before = b.text; selectBubble(p, b.id); });
   t.addEventListener('input', () => { b.text = t.innerText.replace(/\n$/, ''); p.dirty = true; scheduleSave(); });
   t.addEventListener('blur', () => { if (b.text !== before) pushHist(p); });
+
+  const flipBtn = $('.b-flip', n);
+  if (flipBtn) flipBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    b.flip = !b.flip; placeBubble(n, b); pushHist(p);
+  });
 
   $('.b-del', n).addEventListener('click', e => {
     e.stopPropagation();
@@ -534,10 +557,11 @@ function bubbleEl(p, b) {
   });
 
   n.addEventListener('pointerdown', e => {
-    if (p.i !== cur || e.target.closest('.b-del')) return;
+    if (p.i !== cur || e.target.closest('.b-del, .b-flip')) return;
     const editing = document.activeElement === t;
-    let mode = 'tap';
-    if (e.target.closest('.b-size')) mode = 'size';
+    let mode = 'tap', dir = '';
+    const rz = e.target.closest('.rz');
+    if (rz) { mode = 'size'; dir = rz.dataset.dir; }
     else if (e.target.closest('.b-move')) mode = 'move';
     else if (editing && e.target.closest('.btext')) return; // let people select text
     e.preventDefault(); e.stopPropagation();
@@ -551,7 +575,13 @@ function bubbleEl(p, b) {
       if (!moved && Math.hypot(ev.clientX - st.x, ev.clientY - st.y) < 4) return;
       moved = true;
       const dx = (ev.clientX - st.x) / rect.width * 100, dy = (ev.clientY - st.y) / rect.height * 100;
-      if (mode === 'size') { b.w = clamp(st.bw + dx, 10, 130); b.h = clamp(st.bh + dy, 7, 130); }
+      if (mode === 'size') {
+        // sides stretch one way, corners stretch both
+        if (dir.includes('e')) b.w = clamp(st.bw + dx, 8, 130);
+        if (dir.includes('w')) { const w = clamp(st.bw - dx, 8, 130); b.x = st.bx + st.bw - w; b.w = w; }
+        if (dir.includes('s')) b.h = clamp(st.bh + dy, 6, 130);
+        if (dir.includes('n')) { const h = clamp(st.bh - dy, 6, 130); b.y = st.by + st.bh - h; b.h = h; }
+      }
       else { b.x = clamp(st.bx + dx, -b.w + 8, 92); b.y = clamp(st.by + dy, -b.h + 8, 92); }
       placeBubble(n, b);
     };
@@ -783,15 +813,18 @@ function drawBubble(x, b, S) {
   const s = SHAPES[b.type];
   const bx = b.x / 100 * S, by = b.y / 100 * S, bw = b.w / 100 * S, bh = b.h / 100 * S;
   const path = new Path2D();
-  path.addPath(new Path2D(s.d), new DOMMatrix([bw / 100, 0, 0, bh / 100, bx, by]));
+  path.addPath(new Path2D(s.d), b.flip
+    ? new DOMMatrix([-bw / 100, 0, 0, bh / 100, bx + bw, by])
+    : new DOMMatrix([bw / 100, 0, 0, bh / 100, bx, by]));
   x.fillStyle = '#fff'; x.fill(path);
   x.lineWidth = Math.max(2, S * 0.006); x.strokeStyle = INK; x.lineJoin = 'round'; x.stroke(path);
   if (!b.text) return;
-  const fs = S * 0.042, lh = fs * 1.15;
+  const fs = S * bubbleFont(b) / 100, lh = fs * 1.15;
   x.font = `${fs}px "Patrick Hand", "Comic Sans MS", cursive`;
   x.fillStyle = INK; x.textAlign = 'center'; x.textBaseline = 'middle';
-  const L = bx + bw * s.inset[0] / 100, T = by + bh * s.inset[1] / 100;
-  const R = bx + bw - bw * s.inset[2] / 100, B = by + bh - bh * s.inset[3] / 100;
+  const il = b.flip ? s.inset[2] : s.inset[0], ir = b.flip ? s.inset[0] : s.inset[2];
+  const L = bx + bw * il / 100, T = by + bh * s.inset[1] / 100;
+  const R = bx + bw - bw * ir / 100, B = by + bh - bh * s.inset[3] / 100;
   const lines = wrapLines(x, b.text, R - L);
   let y = (T + B) / 2 - (lines.length * lh) / 2 + lh / 2;
   x.save(); x.beginPath(); x.rect(L, T, R - L, B - T); x.clip();
@@ -835,6 +868,26 @@ function applyStrip(c) {
   $('#dispenser').classList.toggle('grid', c.layout === 'grid');
   $$('.bsw').forEach(b => b.classList.toggle('on', b.dataset.c === c.border));
   $$('.shape-btn').forEach(b => b.classList.toggle('on', b.dataset.layout === c.layout));
+  fitStrip();
+}
+
+// Size the panels so the whole strip (plus the buttons under it) fits on screen.
+function fitStrip() {
+  if (resultScreen.hidden || !comic) return;
+  const disp = $('#dispenser'), panelsEl = $('#stripPanels');
+  const grid = comic.layout === 'grid', cols = grid ? 2 : 1, rows = grid ? 2 : 4, GAP = 12;
+  const panelsH = panelsEl.offsetHeight;
+  const chrome = disp.offsetHeight - panelsH;                 // slot, title, name line, padding
+  const top = disp.getBoundingClientRect().top + window.scrollY;
+  const stacked = window.innerWidth <= 760;
+  const actions = stacked ? $('#resSide').offsetHeight + 24 : 24;
+  const availH = window.innerHeight - top - chrome - actions;
+  const availW = Math.min(window.innerWidth, 1100) - 32 - 44 - 36 - (stacked ? 0 : 230 + (!$('#customPanel').hidden ? 266 : 0));
+  let ps = Math.min((availH - GAP * (rows - 1)) / rows, (availW - GAP * (cols - 1)) / cols, grid ? 380 : 440);
+  ps = Math.max(80, Math.floor(ps));
+  disp.style.setProperty('--ps', ps + 'px');
+  disp.style.setProperty('--cols', cols);
+  disp.style.setProperty('--sw', Math.max(ps * cols + GAP * (cols - 1) + 36, 230) + 'px');
 }
 
 async function showResult(c, dispense) {
@@ -845,8 +898,6 @@ async function showResult(c, dispense) {
   $('#stripTitle').value = c.title;
   $('#byInput').value = c.by || '';
   $('#customPanel').hidden = true;
-  applyStrip(c);
-
   const sp = $('#stripPanels'); sp.innerHTML = '';
   c.panels.forEach((src, k) => {
     const b = el('button', 'sp', `<img alt="Panel ${k + 1}" src="${src}">`);
@@ -855,19 +906,21 @@ async function showResult(c, dispense) {
     sp.appendChild(b);
   });
   renderRecent();
+  applyStrip(c);
 
   const strip = $('#strip'), after = $('#resAfter');
+  const side = $('#resSide');
   strip.classList.remove('anim', 'out');
-  after.classList.remove('show');
+  after.classList.remove('show'); side.classList.remove('show');
   if (dispense) {
     await Promise.all($$('img', sp).map(i => i.decode ? i.decode().catch(() => {}) : null));
     void strip.offsetHeight;
     await nextFrame();
     strip.classList.add('anim', 'out');
-    setTimeout(() => after.classList.add('show'), 1900);
+    setTimeout(() => { after.classList.add('show'); side.classList.add('show'); }, 1900);
   } else {
     strip.classList.add('out');
-    after.classList.add('show');
+    after.classList.add('show'); side.classList.add('show');
   }
 }
 
@@ -896,9 +949,10 @@ function buildCustomize() {
   $('#customizeBtn').addEventListener('click', () => {
     const cp = $('#customPanel');
     cp.hidden = !cp.hidden;
+    fitStrip();
     if (!cp.hidden) cp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
-  $('#customDone').addEventListener('click', () => { $('#customPanel').hidden = true; });
+  $('#customDone').addEventListener('click', () => { $('#customPanel').hidden = true; fitStrip(); });
 
   const title = $('#stripTitle');
   title.addEventListener('input', () => { comic.title = title.value; saveComicSoon(); });
@@ -1046,7 +1100,7 @@ function init() {
   $$('[data-share]').forEach(b => b.addEventListener('click', () => onShare(b.dataset.share)));
   drawScreen.addEventListener('wheel', onWheel, { passive: false });
 
-  window.addEventListener('resize', () => { if (!stroke) layout(); });
+  window.addEventListener('resize', () => { if (!stroke) layout(); fitStrip(); });
   mq.addEventListener('change', layout);
   window.addEventListener('hashchange', route);
   window.addEventListener('pagehide', saveDraft);
