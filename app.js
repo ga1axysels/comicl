@@ -12,7 +12,7 @@ const INK = '#1d1b18';
 const LAUNCH = new Date(2026, 10, 16); // months are 0-based: 10 = November
 const PROMPTS = [
   { title: 'The Empty Fishbowl', scene: 'A grumpy old cat sits on a kitchen counter next to a fishbowl.', problem: 'The cat looks over and the fishbowl is suddenly empty.' },
-  { title: 'Knock Knock', scene: 'A kid is home alone, building a pillow fort in the living room.', problem: 'There is a loud knock at the door, but nobody is supposed to visit.' },
+  { title: 'The Toilet', scene: 'A sad person enters the washroom.', problem: 'There is a loud noise coming from the toilet.' },
   { title: 'The Last Slice', scene: 'Two friends sit at a table with one slice of pizza left between them.', problem: 'They both reach for it at the exact same moment.' },
   { title: 'Bus Stop Blues', scene: 'Someone waits at a bus stop as dark clouds roll in.', problem: 'It starts pouring, and they realize their umbrella is still on the bus.' },
   { title: 'Plant Parent', scene: 'Someone proudly waters a tiny sprout on the windowsill.', problem: 'The next morning, the sprout is taller than the house.' },
@@ -23,8 +23,8 @@ const PROMPTS = [
 const PANEL_META = [
   { label: 'Set the scene', key: 'scene' },
   { label: 'Show the problem', key: 'problem' },
-  { label: 'Up to you!' },
-  { label: 'Up to you!' },
+  { label: 'Cook something up.' },
+  { label: 'End off the comic.' },
 ];
 
 // Bubble shapes, drawn in a 100x100 box that stretches to the bubble's size.
