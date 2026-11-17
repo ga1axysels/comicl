@@ -240,23 +240,20 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
   font-family: var(--hand); font-size: calc(var(--canvas) * .042); line-height: 1.15;
   color: var(--ink); outline: none; overflow: hidden;
   white-space: pre-wrap; overflow-wrap: anywhere;
-  -webkit-user-select: text; user-select: text; cursor: text;
+  -webkit-user-select: text; user-select: text; cursor: move;
+}
+.btext:focus { cursor: text;
 }
 .btext:empty::before { content: attr(data-ph); color: #b3ada2; }
 .bubble.sel::before { content: ""; position: absolute; inset: -3px; border: 2px dashed var(--accent); border-radius: 4px; pointer-events: none; }
-.b-del, .b-move, .b-flip, .rz { display: none; position: absolute; z-index: 2; }
-.bubble.sel .b-del, .bubble.sel .b-move, .bubble.sel .b-flip, .bubble.sel .rz { display: grid; }
+.b-del, .b-flip, .rz { display: none; position: absolute; z-index: 2; }
+.bubble.sel .b-del, .bubble.sel .b-flip, .bubble.sel .rz { display: grid; }
 .b-del {
   top: 5px; right: 5px; width: 24px; height: 24px; padding: 0; place-items: center;
   border-radius: 50%; border: 2px solid var(--ink); background: var(--accent); color: #fff; font-weight: 800; font-size: 15px; line-height: 1;
 }
-.b-move {
-  top: 5px; left: 5px; width: 24px; height: 24px; place-items: center;
-  border-radius: 50%; border: 2px solid var(--ink); background: #fff; cursor: move;
-}
-.b-move svg { width: 14px; height: 14px; fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .b-flip {
-  left: 5px; bottom: 5px; width: 24px; height: 24px; padding: 0; place-items: center;
+  top: 5px; left: 5px; width: 24px; height: 24px; padding: 0; place-items: center;
   border-radius: 50%; border: 2px solid var(--ink); background: #fff;
 }
 .b-flip svg { width: 14px; height: 14px; fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }

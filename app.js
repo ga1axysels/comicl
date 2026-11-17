@@ -531,8 +531,7 @@ function bubbleEl(p, b) {
   n.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${s.d}"/></svg>
     <div class="btext" spellcheck="false" data-ph="Type…"></div>
     <button class="b-del" aria-label="Delete bubble">×</button>
-    ${FLIPPABLE[b.type] ? '<button class="b-flip" aria-label="Flip bubble" title="Flip"><svg viewBox="0 0 24 24"><path d="M10 5L3 19h7z"/><path d="M14 5l7 14h-7z" style="fill:#1d1b18"/></svg></button>' : ''}
-    <span class="b-move" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></span>
+    ${FLIPPABLE[b.type] ? '<button class="b-flip" aria-label="Flip bubble" title="Flip"><svg viewBox="0 0 24 24"><path d="M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4"/></svg></button>' : ''}
     ${['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(d => `<span class="rz rz-${d}" data-dir="${d}" aria-hidden="true"></span>`).join('')}`;
   const t = $('.btext', n);
   t.contentEditable = PLAIN ? 'plaintext-only' : 'true';
@@ -562,17 +561,20 @@ function bubbleEl(p, b) {
     let mode = 'tap', dir = '';
     const rz = e.target.closest('.rz');
     if (rz) { mode = 'size'; dir = rz.dataset.dir; }
-    else if (e.target.closest('.b-move')) mode = 'move';
-    else if (editing && e.target.closest('.btext')) return; // let people select text
-    e.preventDefault(); e.stopPropagation();
-    if (!editing) blurBubbles();
+    else if (editing && e.target.closest('.btext')) mode = 'textdrag'; // a click places the cursor, a drag moves the bubble
+    e.stopPropagation();
+    if (mode !== 'textdrag') { e.preventDefault(); if (!editing) blurBubbles(); }
     selectBubble(p, b.id);
     const rect = p.frame.getBoundingClientRect();
     const st = { x: e.clientX, y: e.clientY, bx: b.x, by: b.y, bw: b.w, bh: b.h };
     let moved = false;
-    n.setPointerCapture(e.pointerId);
+    if (mode !== 'textdrag') n.setPointerCapture(e.pointerId);
     const mv = ev => {
-      if (!moved && Math.hypot(ev.clientX - st.x, ev.clientY - st.y) < 4) return;
+      if (!moved && Math.hypot(ev.clientX - st.x, ev.clientY - st.y) < (mode === 'textdrag' ? 6 : 4)) return;
+      if (!moved && mode === 'textdrag') {
+        try { n.setPointerCapture(ev.pointerId); } catch (err) {}
+        t.blur(); getSelection().removeAllRanges(); selectBubble(p, b.id);
+      }
       moved = true;
       const dx = (ev.clientX - st.x) / rect.width * 100, dy = (ev.clientY - st.y) / rect.height * 100;
       if (mode === 'size') {
