@@ -1,11 +1,22 @@
+@font-face {
+  font-family: "Garamondt";
+  src: url("fonts/Garamondt-Regular.woff") format("woff");
+  font-weight: normal; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Garamondt";
+  src: url("fonts/Garamondt-Italic.woff") format("woff");
+  font-weight: normal; font-style: italic; font-display: swap;
+}
+
 :root {
   --paper: #fbf8f1;
   --ink: #1d1b18;
   --muted: #6f6a61;
   --soft: #e7e1d4;
   --accent: #ff5a3c;
-  --hand: "Patrick Hand", "Comic Sans MS", cursive;
-  --ui: Nunito, system-ui, -apple-system, sans-serif;
+  --hand: "Garamondt", Garamond, Georgia, serif;
+  --ui: "Garamondt", Garamond, Georgia, serif;
   --canvas: 560px;
   --page-h: 700px;
   --head-h: 100px;

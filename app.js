@@ -820,7 +820,7 @@ function drawBubble(x, b, S) {
   x.lineWidth = Math.max(2, S * 0.006); x.strokeStyle = INK; x.lineJoin = 'round'; x.stroke(path);
   if (!b.text) return;
   const fs = S * bubbleFont(b) / 100, lh = fs * 1.15;
-  x.font = `${fs}px "Patrick Hand", "Comic Sans MS", cursive`;
+  x.font = `${fs}px "Garamondt", Georgia, serif`;
   x.fillStyle = INK; x.textAlign = 'center'; x.textBaseline = 'middle';
   const il = b.flip ? s.inset[2] : s.inset[0], ir = b.flip ? s.inset[0] : s.inset[2];
   const L = bx + bw * il / 100, T = by + bh * s.inset[1] / 100;
@@ -999,8 +999,8 @@ async function stripCanvas(c) {
   x.fillStyle = c.border; x.fillRect(0, 0, W, H);
 
   x.fillStyle = ink; x.textAlign = 'center'; x.textBaseline = 'middle';
-  let fs = 60; x.font = `${fs}px "Patrick Hand", cursive`;
-  while (x.measureText(c.title).width > W - PAD * 2 && fs > 28) { fs -= 2; x.font = `${fs}px "Patrick Hand", cursive`; }
+  let fs = 60; x.font = `${fs}px "Garamondt", Georgia, serif`;
+  while (x.measureText(c.title).width > W - PAD * 2 && fs > 28) { fs -= 2; x.font = `${fs}px "Garamondt", Georgia, serif`; }
   x.fillText(c.title, W / 2, PAD + TITLE / 2 - 10);
 
   imgs.forEach((im, k) => {
@@ -1011,9 +1011,9 @@ async function stripCanvas(c) {
   });
 
   const yb = PAD + TITLE + rows * PS + (rows - 1) * GAP + BY / 2 + 4;
-  x.fillStyle = ink; x.textAlign = 'left'; x.font = '38px "Patrick Hand", cursive';
+  x.fillStyle = ink; x.textAlign = 'left'; x.font = '38px "Garamondt", Georgia, serif';
   x.fillText('by ' + (c.by || 'anonymous'), PAD, yb);
-  x.textAlign = 'right'; x.globalAlpha = 0.6; x.font = '28px "Patrick Hand", cursive';
+  x.textAlign = 'right'; x.globalAlpha = 0.6; x.font = '28px "Garamondt", Georgia, serif';
   x.fillText(`comicle #${c.n}`, W - PAD, yb);
   x.globalAlpha = 1;
   return cv;
