@@ -64,17 +64,31 @@
         <button class="tool on" data-tool="brush" aria-label="Brush"><svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.4L16 4.8l3.2 3.2L8.4 18.8z"/><path d="M14 7l3 3"/></svg>Brush</button>
         <button class="tool" data-tool="eraser" aria-label="Eraser"><svg viewBox="0 0 24 24"><path d="M9 20h11"/><path d="M4.5 15.5l9-9a1.5 1.5 0 0 1 2 0l3.5 3.5a1.5 1.5 0 0 1 0 2L12 19H8z"/><path d="M9 11l5 5"/></svg>Eraser</button>
         <button class="tool" data-tool="fill" aria-label="Fill bucket"><svg viewBox="0 0 24 24"><path d="M4 12l7-7 7 7-7 7z"/><path d="M4 12h14"/><path d="M20.5 16.5c0 1.2-.8 2-1.5 2s-1.5-.8-1.5-2c0-1 1.5-3 1.5-3s1.5 2 1.5 3z"/></svg>Fill</button>
+        <button class="tool" data-tool="select" aria-label="Select"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="3 3"/></svg>Select</button>
       </div>
       <div class="tb-row">
         <button class="icon-btn" id="undoBtn" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 6L4 11l5 5"/><path d="M4 11h11a5 5 0 0 1 0 10h-3"/></svg></button>
         <button class="icon-btn" id="redoBtn" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 6l5 5-5 5"/><path d="M20 11H9a5 5 0 0 0 0 10h3"/></svg></button>
         <button class="text-btn" id="clearBtn">Clear panel</button>
       </div>
+      <div class="tb-row">
+        <button class="text-btn paste-btn" id="pasteBtn" disabled>Paste</button>
+      </div>
     </div>
 
     <div class="tb-group">
       <h4>Bubbles <small>drag onto panel</small></h4>
       <div class="bubbles-row" id="bubbleBtns"></div>
+    </div>
+
+    <div class="tb-group">
+      <h4>Photo</h4>
+      <div class="photo-row">
+        <button class="text-btn" id="photoUpload"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Upload</button>
+        <button class="text-btn" id="photoCamera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Camera</button>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
     </div>
 
     <div class="tb-group">
@@ -155,9 +169,39 @@
   </div>
 </section>
 
+<div class="modal" id="photoModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="peTitle">
+    <h3 id="peTitle">Edit your photo</h3>
+    <p class="modal-sub">Rub out anything you don't want. The checkered parts will be see-through.</p>
+    <div class="pe-stage" id="peStage"><canvas id="peCanvas"></canvas></div>
+    <div class="pe-tools">
+      <button class="tool on" data-pe-tool="erase"><svg viewBox="0 0 24 24"><path d="M9 20h11"/><path d="M4.5 15.5l9-9a1.5 1.5 0 0 1 2 0l3.5 3.5a1.5 1.5 0 0 1 0 2L12 19H8z"/></svg>Erase</button>
+      <button class="tool" data-pe-tool="restore"><svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.4L16 4.8l3.2 3.2L8.4 18.8z"/></svg>Bring back</button>
+      <label class="pe-size">Size <input type="range" id="peSize" class="rng" min="6" max="90" value="30"></label>
+      <button class="icon-btn" id="peUndo" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 6L4 11l5 5"/><path d="M4 11h11a5 5 0 0 1 0 10h-3"/></svg></button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="peCancel">Cancel</button>
+      <button class="btn btn-primary" id="peAdd">Add to panel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="cameraModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="camTitle">
+    <h3 id="camTitle">Take a photo</h3>
+    <div class="cam-stage"><video id="camVideo" autoplay playsinline muted></video></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="camCancel">Cancel</button>
+      <button class="btn btn-primary" id="camSnap">Snap</button>
+    </div>
+  </div>
+</div>
+
 <div class="lightbox" id="lightbox" hidden><img id="lightboxImg" alt=""></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

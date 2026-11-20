@@ -42,7 +42,7 @@ const SHAPES = {
     d: 'M1 1H99V99H1Z' },
 };
 
-const SWATCHES = ['#1d1b18', '#ffffff', '#8a8580', '#ff5a3c', '#ff9f1c', '#ffd23f', '#3bb273', '#2ec4b6', '#3d7eff', '#8b5cf6', '#ff8fc8', '#8d5a3b'];
+const SWATCHES = ['#1d1b18', '#ffffff', '#ff5a3c', '#ffd23f', '#3bb273', '#3d7eff', '#8b5cf6', '#8d5a3b'];
 const BORDERS = ['#ffffff', '#1d1b18', '#f6ecd6', '#ff5a3c', '#ffd23f', '#3bb273', '#3d7eff', '#ff8fc8', '#8b5cf6', '#2ec4b6'];
 
 /* =========================================================
@@ -110,6 +110,7 @@ const homeScreen = $('#home'), drawScreen = $('#draw'), resultScreen = $('#resul
 const track = $('#track'), viewport = $('#viewport'), drawTop = $('#drawTop'), mobileBar = $('#mobileBar');
 const toolbar = $('#toolbar'), sheet = $('#sheet');
 const mq = matchMedia('(max-width: 760px)');
+const TOOL_W = 260; // toolbar width on computers (keep in sync with .tool-slot in style.css)
 
 let mobile = mq.matches;
 let panels = [];
@@ -243,14 +244,19 @@ function layout() {
   const vw = window.innerWidth, vh = window.innerHeight;
   const topH = drawTop.offsetHeight || (mobile ? 52 : 60);
   const barH = mobile ? (mobileBar.offsetHeight || 64) : 0;
-  const vpH = vh - topH - barH;
-  const peek = mobile ? 0 : Math.round(clamp(vpH * 0.1, 48, 84));
-  pageH = vpH - peek;
-  const headH = mobile ? 86 : 100, footH = mobile ? 0 : 72;
+  const fullH = vh - topH - barH;
+  const peek = mobile ? 0 : Math.round(clamp(fullH * 0.1, 48, 84));
+  const headH = mobile ? 96 : 112, footH = mobile ? 0 : 72;
+  const maxPage = fullH - peek;
   canvasPx = mobile
-    ? Math.min(vw - 24, pageH - headH - 12)
-    : Math.min(pageH - headH - footH, vw - 236 - 24 - 48, 780);
+    ? Math.min(vw - 24, maxPage - headH - 12)
+    : Math.min(maxPage - headH - footH, vw - TOOL_W - 24 - 48, 780);
   canvasPx = Math.max(220, Math.floor(canvasPx));
+  // On big screens the content is shorter than the window: centre logo + panel vertically.
+  pageH = mobile ? maxPage : Math.min(maxPage, headH + canvasPx + footH + 16);
+  const padTop = mobile ? 0 : Math.floor((maxPage - pageH) / 2);
+  drawScreen.style.paddingTop = padTop + 'px';
+  const vpH = fullH - padTop;
 
   const rs = document.documentElement.style;
   rs.setProperty('--page-h', pageH + 'px');
@@ -279,6 +285,7 @@ function goTo(i, instant = false) {
   i = clamp(i, 0, 3);
   blurBubbles();
   closeSheet();
+  commitPaste(); clearSelection();
   if (panels[cur] && i !== cur) trimHistory(panels[cur]);
   cur = i;
   setTrack(instant);
@@ -332,7 +339,10 @@ function attachDrawing(p) {
     if (e.button > 0 || p.i !== cur || stroke) return;
     e.preventDefault();
     blurBubbles();
+    if (piece) { commitPaste(); return; }        // tapping away places a pasted piece
     const pt = toCanvas(e, c);
+    if (tool === 'select') { startSelect(p, c, e, pt); return; }
+    clearSelection();
     if (tool === 'fill') { floodFill(p, pt); pushHist(p); return; }
     c.setPointerCapture(e.pointerId);
     const ctx = tool === 'eraser' ? p.actx : p.lctx;
@@ -436,8 +446,8 @@ function restore(p, s) {
   renderBubbles(p);
   p.dirty = true; scheduleSave(); updateUndo();
 }
-function undo() { const p = panels[cur]; blurBubbles(); if (p.hi > 0) restore(p, p.hist[--p.hi]); }
-function redo() { const p = panels[cur]; blurBubbles(); if (p.hi < p.hist.length - 1) restore(p, p.hist[++p.hi]); }
+function undo() { if (piece) { cancelPaste(); return; } clearSelection(); const p = panels[cur]; blurBubbles(); if (p.hi > 0) restore(p, p.hist[--p.hi]); }
+function redo() { if (piece) { cancelPaste(); return; } clearSelection(); const p = panels[cur]; blurBubbles(); if (p.hi < p.hist.length - 1) restore(p, p.hist[++p.hi]); }
 function trimHistory(p) { // keep memory low for panels you're not on
   if (p.hist.length > 6) { const from = Math.max(0, p.hi - 5); p.hist = p.hist.slice(from, p.hi + 1); p.hi = p.hist.length - 1; }
 }
@@ -448,10 +458,180 @@ function updateUndo() {
   $('#redoBtn').disabled = $('#mRedo').disabled = r;
 }
 function clearPanel() {
+  cancelPaste(); clearSelection();
   const p = panels[cur];
   p.actx.clearRect(0, 0, RES, RES);
   p.bubbles = []; renderBubbles(p); pushHist(p);
 }
+
+/* =========================================================
+   Select, copy, cut and paste (works across panels)
+   ========================================================= */
+let selection = null; // { p, x, y, w, h, el }  in drawing pixels
+let clip = null;      // what was copied
+let piece = null;     // a pasted piece that is still floating { p, clip, x, y, w, h, el } in % of the panel
+
+const pct = v => v / RES * 100;
+const barInside = topPct => topPct * canvasPx / 100 < 48; // no room above? put the buttons inside
+
+function placeBox(el, x, y, w, h) { // values in % of the panel
+  el.style.left = x + '%'; el.style.top = y + '%'; el.style.width = w + '%'; el.style.height = h + '%';
+}
+function rectFrom(a, b) {
+  const x1 = clamp(Math.min(a.x, b.x), 0, RES), y1 = clamp(Math.min(a.y, b.y), 0, RES);
+  const x2 = clamp(Math.max(a.x, b.x), 0, RES), y2 = clamp(Math.max(a.y, b.y), 0, RES);
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+function clearSelection() { if (selection) { selection.el.remove(); selection = null; } }
+
+function startSelect(p, c, e, start) {
+  clearSelection();
+  const box = el('div', 'sel-box');
+  p.frame.appendChild(box);
+  let r = null;
+  c.setPointerCapture(e.pointerId);
+  const mv = ev => { r = rectFrom(start, toCanvas(ev, c)); placeBox(box, pct(r.x), pct(r.y), pct(r.w), pct(r.h)); };
+  const up = () => {
+    c.removeEventListener('pointermove', mv); c.removeEventListener('pointerup', up); c.removeEventListener('pointercancel', up);
+    box.remove();
+    if (r && r.w > 10 && r.h > 10) showSelection(p, r);
+  };
+  c.addEventListener('pointermove', mv); c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
+}
+
+function showSelection(p, r) {
+  const box = el('div', 'sel-box' + (barInside(pct(r.y)) ? ' bar-in' : ''),
+    '<div class="sel-bar"><button data-a="copy">Copy</button><button data-a="cut">Cut</button></div>');
+  placeBox(box, pct(r.x), pct(r.y), pct(r.w), pct(r.h));
+  $('.sel-bar', box).addEventListener('pointerdown', e => e.stopPropagation());
+  $('[data-a=copy]', box).addEventListener('click', () => copySelection(false));
+  $('[data-a=cut]', box).addEventListener('click', () => copySelection(true));
+  p.frame.appendChild(box);
+  selection = { p, ...r, el: box };
+}
+
+function copySelection(cut) {
+  if (!selection) return false;
+  const { p, x, y, w, h } = selection;
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w)); cv.height = Math.max(1, Math.round(h));
+  cv.getContext('2d').drawImage(p.art, x, y, w, h, 0, 0, cv.width, cv.height);
+  const X = pct(x), Y = pct(y), W = pct(w), H = pct(h);
+  const inside = p.bubbles.filter(b => {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    return cx >= X && cx <= X + W && cy >= Y && cy <= Y + H;
+  });
+  clip = {
+    canvas: cv, x: X, y: Y, w: W, h: H, from: p.i,
+    bubbles: inside.map(b => ({ type: b.type, text: b.text, flip: !!b.flip, seed: bubbleSeed(b),
+      rx: (b.x - X) / W, ry: (b.y - Y) / H, rw: b.w / W, rh: b.h / H })),
+  };
+  if (cut) {
+    p.actx.clearRect(x, y, w, h);
+    p.bubbles = p.bubbles.filter(b => !inside.includes(b));
+    renderBubbles(p); pushHist(p);
+  }
+  clearSelection(); updatePasteBtn();
+  toast((cut ? 'Cut.' : 'Copied.') + (mobile ? ' Open Add-ons on any panel and tap Paste.' : ' Go to any panel and press Paste (Cmd/Ctrl + V).'));
+  return true;
+}
+
+function deleteSelection() {
+  if (!selection) return;
+  const { p, x, y, w, h } = selection;
+  p.actx.clearRect(x, y, w, h);
+  clearSelection(); pushHist(p);
+}
+
+// Picture of the copied area with its bubbles, used while the piece is floating.
+function clipPreview(cl) {
+  const full = document.createElement('canvas'); full.width = full.height = RES;
+  const fx = full.getContext('2d');
+  const px = cl.x / 100 * RES, py = cl.y / 100 * RES, pw = cl.w / 100 * RES, ph = cl.h / 100 * RES;
+  fx.drawImage(cl.canvas, px, py, pw, ph);
+  cl.bubbles.forEach(cb => drawBubble(fx, { ...cb, x: cl.x + cb.rx * cl.w, y: cl.y + cb.ry * cl.h, w: cb.rw * cl.w, h: cb.rh * cl.h }, RES));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(pw)); out.height = Math.max(1, Math.round(ph));
+  out.getContext('2d').drawImage(full, px, py, pw, ph, 0, 0, out.width, out.height);
+  return out;
+}
+
+function placePiece() {
+  placeBox(piece.el, piece.x, piece.y, piece.w, piece.h);
+  piece.el.classList.toggle('bar-in', barInside(piece.y));
+}
+
+function pasteClip() {
+  if (!clip) { toast('Select part of a panel and copy it first.'); return; }
+  let { x, y, w, h } = clip;
+  if (clip.from === cur) { x += 4; y += 4; } // same panel: nudge so you can see it's a copy
+  floatPiece(clip, x, y, w, h, false);
+}
+
+// Put something on the panel as a piece you can move/resize before placing it.
+function floatPiece(cl, x, y, w, h, keepRatio) {
+  commitPaste(); clearSelection(); blurBubbles(); closeSheet();
+  const p = panels[cur];
+  const clip = cl;
+  x = clamp(x, -w + 10, 90); y = clamp(y, -h + 10, 90);
+  const node = el('div', 'paste-piece');
+  node.appendChild(clipPreview(clip));
+  node.insertAdjacentHTML('beforeend',
+    ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(d => `<span class="rz rz-${d}" data-dir="${d}" aria-hidden="true"></span>`).join('') +
+    '<div class="sel-bar"><button class="pp-place" data-a="place">Place ✓</button><button data-a="cancel" aria-label="Cancel paste">×</button></div>');
+  piece = { p, clip, x, y, w, h, el: node, ratio: keepRatio ? w / h : 0 };
+  placePiece();
+  p.frame.appendChild(node);
+  $('.sel-bar', node).addEventListener('pointerdown', e => e.stopPropagation());
+  $('[data-a=place]', node).addEventListener('click', commitPaste);
+  $('[data-a=cancel]', node).addEventListener('click', cancelPaste);
+
+  node.addEventListener('pointerdown', e => {
+    if (!piece || e.button > 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const rz = e.target.closest('.rz'), dir = rz ? rz.dataset.dir : '';
+    const rect = p.frame.getBoundingClientRect();
+    const st = { x: e.clientX, y: e.clientY, px: piece.x, py: piece.y, pw: piece.w, ph: piece.h };
+    node.setPointerCapture(e.pointerId);
+    const mv = ev => {
+      const dx = (ev.clientX - st.x) / rect.width * 100, dy = (ev.clientY - st.y) / rect.height * 100;
+      if (dir && piece.ratio && dir.length === 2) { // photos: corners keep the shape
+        const w2 = clamp(dir.includes('e') ? st.pw + dx : st.pw - dx, 3, 200), h2 = w2 / piece.ratio;
+        if (dir.includes('w')) piece.x = st.px + st.pw - w2;
+        if (dir.includes('n')) piece.y = st.py + st.ph - h2;
+        piece.w = w2; piece.h = h2;
+      } else if (dir) {
+        if (dir.includes('e')) piece.w = clamp(st.pw + dx, 3, 200);
+        if (dir.includes('w')) { const w2 = clamp(st.pw - dx, 3, 200); piece.x = st.px + st.pw - w2; piece.w = w2; }
+        if (dir.includes('s')) piece.h = clamp(st.ph + dy, 3, 200);
+        if (dir.includes('n')) { const h2 = clamp(st.ph - dy, 3, 200); piece.y = st.py + st.ph - h2; piece.h = h2; }
+      } else {
+        piece.x = clamp(st.px + dx, -piece.w + 6, 94); piece.y = clamp(st.py + dy, -piece.h + 6, 94);
+      }
+      placePiece();
+    };
+    const up = () => { node.removeEventListener('pointermove', mv); node.removeEventListener('pointerup', up); node.removeEventListener('pointercancel', up); };
+    node.addEventListener('pointermove', mv); node.addEventListener('pointerup', up); node.addEventListener('pointercancel', up);
+  });
+}
+
+function commitPaste() {
+  if (!piece) return;
+  const { p, clip: cl, x, y, w, h } = piece;
+  p.actx.drawImage(cl.canvas, x / 100 * RES, y / 100 * RES, w / 100 * RES, h / 100 * RES);
+  cl.bubbles.forEach(cb => {
+    const b = { id: bid++, seed: cb.seed, type: cb.type, text: cb.text, flip: cb.flip,
+      x: x + cb.rx * w, y: y + cb.ry * h, w: cb.rw * w, h: cb.rh * h };
+    if (SHAPES[b.type].edge) snapEdge(b);
+    p.bubbles.push(b);
+  });
+  piece.el.remove(); piece = null;
+  renderBubbles(p); pushHist(p);
+}
+function cancelPaste() { if (piece) { piece.el.remove(); piece = null; } }
+
+function updatePasteBtn() { $('#pasteBtn').disabled = !clip; }
 
 /* =========================================================
    Speech bubbles
@@ -464,6 +644,26 @@ function bubbleFont(b) {
   return clamp(4.2 * Math.sqrt((b.w / s.w) * (b.h / s.h)), 1.6, 16);
 }
 const FLIPPABLE = { speech: 1, thought: 1, shout: 1 };
+
+const bubbleSeed = b => b.seed || ((b.id * 7919) % 2147483646) + 1;
+const sketchCache = new Map();
+// Wobbly, slightly doubled outline paths in the shape's 100x100 box. Falls back to the clean path.
+function sketchPaths(type, seed) {
+  const key = type + ':' + seed;
+  if (sketchCache.has(key)) return sketchCache.get(key);
+  let out = [SHAPES[type].d];
+  try {
+    if (window.rough) {
+      const g = rough.generator();
+      const dr = g.path(SHAPES[type].d, { seed, roughness: 1.1, bowing: 1, maxRandomnessOffset: 1.5, strokeWidth: 1 });
+      const ds = g.toPaths(dr).filter(p => p.stroke && p.stroke !== 'none').map(p => p.d);
+      if (ds.length) out = ds;
+    }
+  } catch (e) {}
+  sketchCache.set(key, out);
+  return out;
+}
+const bubbleSvg = b => `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="b-fill" d="${SHAPES[b.type].d}"/>${sketchPaths(b.type, bubbleSeed(b)).map(d => `<path class="b-ink" d="${d}"/>`).join('')}</svg>`;
 
 function placeBubble(n, b) {
   n.style.left = b.x + '%'; n.style.top = b.y + '%';
@@ -491,7 +691,7 @@ function snapEdge(b) {
 
 function addBubble(p, type, cx, cy) {
   const s = SHAPES[type];
-  const b = { id: bid++, type, w: s.w, h: s.h, text: '' };
+  const b = { id: bid++, seed: 1 + Math.floor(Math.random() * 2147483000), type, w: s.w, h: s.h, text: '' };
   b.x = clamp(cx - s.w / 2, 0, 100 - s.w);
   b.y = clamp(cy - s.h / 2, 0, 100 - s.h);
   if (s.edge) snapEdge(b);
@@ -528,7 +728,7 @@ function bubbleEl(p, b) {
   const s = SHAPES[b.type];
   const n = el('div', 'bubble');
   n.dataset.id = b.id;
-  n.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${s.d}"/></svg>
+  n.innerHTML = `${bubbleSvg(b)}
     <div class="btext" spellcheck="false" data-ph="Type…"></div>
     <button class="b-del" aria-label="Delete bubble">×</button>
     ${FLIPPABLE[b.type] ? '<button class="b-flip" aria-label="Flip bubble" title="Flip"><svg viewBox="0 0 24 24"><path d="M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4"/></svg></button>' : ''}
@@ -656,7 +856,8 @@ function buildBubbleButtons() {
    ========================================================= */
 function setTool(t) {
   tool = t;
-  $$('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  if (t !== 'select') clearSelection();
+  $$('.tool[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   document.body.classList.toggle('tool-fill', t === 'fill');
 }
 
@@ -688,11 +889,12 @@ function updateSizeDot() {
 }
 
 function buildToolbar() {
-  $$('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  $$('.tool[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
   $('#undoBtn').addEventListener('click', undo);
   $('#redoBtn').addEventListener('click', redo);
   $('#mUndo').addEventListener('click', undo);
   $('#mRedo').addEventListener('click', redo);
+  $('#pasteBtn').addEventListener('click', pasteClip);
   $('#clearBtn').addEventListener('click', () => { clearPanel(); toast('Panel cleared. Undo brings it back.'); });
 
   const sw = $('#swatches');
@@ -761,6 +963,15 @@ async function loadDraft() {
   ready = true;
 }
 
+// PNG keeps drawings crisp; panels with photos get big, so those are saved as JPEG on white.
+function panelDataUrl(p) {
+  const png = p.art.toDataURL('image/png');
+  if (png.length < 700000) return png;
+  const c = document.createElement('canvas'); c.width = c.height = RES;
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, RES, RES); x.drawImage(p.art, 0, 0);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+
 let saveT;
 function scheduleSave() { clearTimeout(saveT); saveT = setTimeout(saveDraft, 500); }
 function saveDraft() {
@@ -768,7 +979,7 @@ function saveDraft() {
   const data = {
     cur,
     panels: panels.map(p => {
-      if (p.dirty) { p.url = isBlank(p) ? null : p.art.toDataURL('image/png'); p.dirty = false; }
+      if (p.dirty) { p.url = isBlank(p) ? null : panelDataUrl(p); p.dirty = false; }
       return { img: p.url, bubbles: p.bubbles };
     }),
   };
@@ -814,12 +1025,12 @@ function wrapLines(x, text, maxW) {
 function drawBubble(x, b, S) {
   const s = SHAPES[b.type];
   const bx = b.x / 100 * S, by = b.y / 100 * S, bw = b.w / 100 * S, bh = b.h / 100 * S;
-  const path = new Path2D();
-  path.addPath(new Path2D(s.d), b.flip
-    ? new DOMMatrix([-bw / 100, 0, 0, bh / 100, bx + bw, by])
-    : new DOMMatrix([bw / 100, 0, 0, bh / 100, bx, by]));
-  x.fillStyle = '#fff'; x.fill(path);
-  x.lineWidth = Math.max(2, S * 0.006); x.strokeStyle = INK; x.lineJoin = 'round'; x.stroke(path);
+  const m = b.flip ? new DOMMatrix([-bw / 100, 0, 0, bh / 100, bx + bw, by]) : new DOMMatrix([bw / 100, 0, 0, bh / 100, bx, by]);
+  const fill = new Path2D(); fill.addPath(new Path2D(s.d), m);
+  x.fillStyle = '#fff'; x.fill(fill);
+  const ink = new Path2D();
+  sketchPaths(b.type, bubbleSeed(b)).forEach(d => ink.addPath(new Path2D(d), m));
+  x.lineWidth = Math.max(1.6, S * 0.0045); x.strokeStyle = INK; x.lineJoin = 'round'; x.lineCap = 'round'; x.stroke(ink);
   if (!b.text) return;
   const fs = S * bubbleFont(b) / 100, lh = fs * 1.15;
   x.font = `${fs}px "Nirvanna", "Garamondt", Georgia, serif`;
@@ -846,6 +1057,7 @@ function composite(p, S) {
 }
 
 async function finish() {
+  commitPaste(); clearSelection();
   blurBubbles();
   try { await document.fonts.ready; } catch (e) {}
   const c = {
@@ -876,6 +1088,7 @@ function applyStrip(c) {
 // Size the panels so the whole strip (plus the buttons under it) fits on screen.
 function fitStrip() {
   if (resultScreen.hidden || !comic) return;
+  resultScreen.style.paddingTop = '';
   const disp = $('#dispenser'), panelsEl = $('#stripPanels');
   const grid = comic.layout === 'grid', cols = grid ? 2 : 1, rows = grid ? 2 : 4, GAP = 12;
   const panelsH = panelsEl.offsetHeight;
@@ -890,6 +1103,11 @@ function fitStrip() {
   disp.style.setProperty('--ps', ps + 'px');
   disp.style.setProperty('--cols', cols);
   disp.style.setProperty('--sw', Math.max(ps * cols + GAP * (cols - 1) + 36, 230) + 'px');
+  // centre the comic vertically when there's spare room
+  if (!stacked) {
+    const used = disp.getBoundingClientRect().bottom + window.scrollY - (parseFloat(resultScreen.style.paddingTop) || 18);
+    resultScreen.style.paddingTop = Math.max(18, Math.floor((window.innerHeight - used - 18) / 2)) + 'px';
+  } else resultScreen.style.paddingTop = '';
 }
 
 async function showResult(c, dispense) {
@@ -1009,7 +1227,8 @@ async function stripCanvas(c) {
     const col = grid ? k % 2 : 0, row = grid ? k >> 1 : k;
     const px = PAD + col * (PS + GAP), py = PAD + TITLE + row * (PS + GAP);
     x.drawImage(im, px, py, PS, PS);
-    x.lineWidth = 6; x.strokeStyle = INK; x.strokeRect(px + 3, py + 3, PS - 6, PS - 6);
+    x.lineWidth = 6; x.strokeStyle = INK; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.stroke(sketchRectPath(px + 4, py + 4, PS - 8, PS - 8, 0, 6, 1000 + k));
   });
 
   const yb = PAD + TITLE + rows * PS + (rows - 1) * GAP + BY / 2 + 4;
@@ -1060,6 +1279,223 @@ async function onShare(kind) {
 }
 
 /* =========================================================
+   Photos: upload or take one, rub out parts, then place it
+   ========================================================= */
+const PHOTO_MAX = 1000;
+const pe = { canvas: null, ctx: null, orig: null, tool: 'erase', size: 30, hist: [], drawing: null };
+
+async function loadPhotoFile(file) {
+  if (!file || !file.type.startsWith('image/')) { toast('That file is not a picture.'); return; }
+  const url = URL.createObjectURL(file);
+  try { openPhotoEditor(await loadImg(url)); }
+  catch (e) { toast('Could not open that picture.'); }
+  finally { URL.revokeObjectURL(url); }
+}
+
+function openPhotoEditor(src) {
+  const sw = src.videoWidth || src.naturalWidth || src.width, sh = src.videoHeight || src.naturalHeight || src.height;
+  const k = Math.min(1, PHOTO_MAX / Math.max(sw, sh));
+  const w = Math.max(1, Math.round(sw * k)), h = Math.max(1, Math.round(sh * k));
+  const cv = $('#peCanvas');
+  cv.width = w; cv.height = h;
+  pe.canvas = cv; pe.ctx = cv.getContext('2d', { willReadFrequently: true });
+  pe.ctx.clearRect(0, 0, w, h);
+  pe.ctx.drawImage(src, 0, 0, w, h);
+  pe.orig = document.createElement('canvas'); pe.orig.width = w; pe.orig.height = h;
+  pe.orig.getContext('2d').drawImage(cv, 0, 0);
+  pe.hist = [pe.ctx.getImageData(0, 0, w, h)];
+  setPeTool('erase');
+  $('#peUndo').disabled = true;
+  $('#photoModal').hidden = false;
+  fitPeCanvas();
+}
+
+function fitPeCanvas() {
+  const cv = pe.canvas; if (!cv || $('#photoModal').hidden) return;
+  const stage = $('#peStage');
+  const maxW = stage.clientWidth, maxH = Math.max(200, window.innerHeight * (mobile ? 0.5 : 0.58));
+  const k = Math.min(maxW / cv.width, maxH / cv.height);
+  cv.style.width = Math.floor(cv.width * k) + 'px';
+  cv.style.height = Math.floor(cv.height * k) + 'px';
+}
+
+function setPeTool(t) {
+  pe.tool = t;
+  $$('[data-pe-tool]').forEach(b => b.classList.toggle('on', b.dataset.peTool === t));
+}
+
+function closePhotoEditor() { $('#photoModal').hidden = true; pe.hist = []; }
+
+function peStroke(from, to) {
+  const x = pe.ctx, r = pe.canvas.width / pe.canvas.getBoundingClientRect().width;
+  x.save();
+  x.lineCap = 'round'; x.lineJoin = 'round'; x.lineWidth = pe.size * r;
+  if (pe.tool === 'erase') { x.globalCompositeOperation = 'destination-out'; x.strokeStyle = '#000'; }
+  else { x.globalCompositeOperation = 'source-over'; x.strokeStyle = x.createPattern(pe.orig, 'no-repeat'); }
+  x.beginPath(); x.moveTo(from.x, from.y); x.lineTo(to.x + 0.01, to.y); x.stroke();
+  x.restore();
+}
+
+function setupPhotoEditor() {
+  const cv = $('#peCanvas');
+  const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; };
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    const p0 = pt(e); pe.drawing = p0; peStroke(p0, p0);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!pe.drawing) return;
+    (e.getCoalescedEvents ? e.getCoalescedEvents() : [e]).forEach(ev => { const p1 = pt(ev); peStroke(pe.drawing, p1); pe.drawing = p1; });
+  });
+  const end = () => {
+    if (!pe.drawing) return;
+    pe.drawing = null;
+    pe.hist.push(pe.ctx.getImageData(0, 0, cv.width, cv.height));
+    if (pe.hist.length > 15) pe.hist.splice(1, 1); // always keep the original first
+    $('#peUndo').disabled = pe.hist.length < 2;
+  };
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+
+  $$('[data-pe-tool]').forEach(b => b.addEventListener('click', () => setPeTool(b.dataset.peTool)));
+  $('#peSize').addEventListener('input', e => { pe.size = +e.target.value; });
+  $('#peUndo').addEventListener('click', () => {
+    if (pe.hist.length < 2) return;
+    pe.hist.pop(); pe.ctx.putImageData(pe.hist[pe.hist.length - 1], 0, 0);
+    $('#peUndo').disabled = pe.hist.length < 2;
+  });
+  $('#peCancel').addEventListener('click', closePhotoEditor);
+  $('#peAdd').addEventListener('click', addPhotoToPanel);
+
+  $('#photoUpload').addEventListener('click', () => { closeSheet(); $('#fileInput').click(); });
+  $('#photoCamera').addEventListener('click', () => { closeSheet(); mobile ? $('#cameraInput').click() : openCamera(); });
+  $('#fileInput').addEventListener('change', e => { loadPhotoFile(e.target.files[0]); e.target.value = ''; });
+  $('#cameraInput').addEventListener('change', e => { loadPhotoFile(e.target.files[0]); e.target.value = ''; });
+
+  $('#camSnap').addEventListener('click', () => {
+    const v = $('#camVideo');
+    if (!v.videoWidth) return;
+    const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+    const x = c.getContext('2d'); x.translate(c.width, 0); x.scale(-1, 1); x.drawImage(v, 0, 0); // un-mirror the selfie view
+    closeCamera(); openPhotoEditor(c);
+  });
+  $('#camCancel').addEventListener('click', closeCamera);
+  window.addEventListener('resize', fitPeCanvas);
+}
+
+// Trim fully see-through edges so the piece is only as big as what's left.
+function trimmed(cv) {
+  const { width: w, height: h } = cv, d = cv.getContext('2d').getImageData(0, 0, w, h).data;
+  let x1 = w, y1 = h, x2 = -1, y2 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (d[(y * w + x) * 4 + 3] > 8) { if (x < x1) x1 = x; if (x > x2) x2 = x; if (y < y1) y1 = y; if (y > y2) y2 = y; }
+  }
+  if (x2 < 0) return null;
+  const out = document.createElement('canvas'); out.width = x2 - x1 + 1; out.height = y2 - y1 + 1;
+  out.getContext('2d').drawImage(cv, x1, y1, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+function addPhotoToPanel() {
+  const cv = trimmed(pe.canvas);
+  if (!cv) { toast('Everything was erased. Undo or pick another photo.'); return; }
+  closePhotoEditor();
+  const ratio = cv.width / cv.height, big = 70;
+  const w = ratio >= 1 ? big : big * ratio, h = ratio >= 1 ? big / ratio : big;
+  floatPiece({ canvas: cv, bubbles: [], x: 0, y: 0, w, h, from: -1 }, (100 - w) / 2, (100 - h) / 2, w, h, true);
+  toast('Move or resize the photo, then press Place.');
+}
+
+/* desktop camera */
+let camStream = null;
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('This browser cannot use the camera. Try Upload instead.'); return; }
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 } }, audio: false });
+  } catch (e) { toast('Camera not available. Check the browser permission, or use Upload.'); return; }
+  $('#camVideo').srcObject = camStream;
+  $('#cameraModal').hidden = false;
+}
+function closeCamera() {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = null; $('#camVideo').srcObject = null;
+  $('#cameraModal').hidden = true;
+}
+
+/* =========================================================
+   Hand-drawn borders on boxes and buttons
+   ========================================================= */
+// Everything matching this gets a wobbly pencil border instead of its CSS border.
+// The phone Add-ons sheet is left plain on purpose.
+const SKETCH_SEL = '.frame, .btn, .icon-btn, .text-btn, .tool, .title-card, .desc, .tool-slot, .custom, .sp, .modal-card, .shape-btn, .sel-bar button';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function roundRectD(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (!r) return `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
+  return `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w} ${y + r}V${y + h - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}` +
+    `H${x + r}A${r} ${r} 0 0 1 ${x} ${y + h - r}V${y + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+}
+function sketchDs(d, seed, bw) {
+  try {
+    const g = rough.generator();
+    return g.toPaths(g.path(d, { seed, roughness: 0.9, bowing: 0.7, strokeWidth: bw, maxRandomnessOffset: 1.4 }))
+      .filter(p => p.stroke && p.stroke !== 'none').map(p => p.d);
+  } catch (e) { return [d]; }
+}
+// Same look for the downloaded strip image.
+function sketchRectPath(x, y, w, h, r, bw, seed) {
+  const p = new Path2D();
+  (window.rough ? sketchDs(roundRectD(x, y, w, h, r), seed, bw) : [roundRectD(x, y, w, h, r)]).forEach(d => p.addPath(new Path2D(d)));
+  return p;
+}
+
+let sketchRO = null;
+function drawSketch(el) {
+  const svg = el.querySelector(':scope > .sk-svg');
+  if (!svg) return;
+  const w = el.offsetWidth, h = el.offsetHeight;
+  if (!w || !h) return;
+  const key = w + 'x' + h;
+  if (svg.dataset.k === key) return;
+  svg.dataset.k = key;
+  const slot = el.classList.contains('tool-slot');
+  const cs = getComputedStyle(el);
+  const bw = slot ? 3 : (parseFloat(cs.borderTopWidth) || 2);
+  const r = slot ? 14 : (parseFloat(cs.borderTopLeftRadius) || 0);
+  // the svg sits inside the padding box, so pull it out by the border width to cover the whole box
+  const off = slot ? 0 : bw;
+  Object.assign(svg.style, { left: -off + 'px', top: -off + 'px', width: w + 'px', height: h + 'px' });
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  const inset = bw / 2 + 1.2;
+  svg.innerHTML = sketchDs(roundRectD(inset, inset, w - inset * 2, h - inset * 2, r), +el.dataset.seed, bw)
+    .map(d => `<path d="${d}" stroke-width="${bw}"/>`).join('');
+}
+
+function sketchify(el) {
+  if (el.__sk || !window.rough) return;
+  el.__sk = true;
+  if (!el.dataset.seed) el.dataset.seed = 1 + Math.floor(Math.random() * 1e9);
+  if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'sk-svg'); svg.setAttribute('aria-hidden', 'true');
+  el.appendChild(svg);
+  el.classList.add('sk');
+  sketchRO.observe(el);
+  drawSketch(el);
+}
+
+function setupSketch() {
+  if (!window.rough || !window.ResizeObserver) return;
+  sketchRO = new ResizeObserver(entries => entries.forEach(e => drawSketch(e.target)));
+  document.querySelectorAll(SKETCH_SEL).forEach(sketchify);
+  new MutationObserver(muts => muts.forEach(m => m.addedNodes.forEach(n => {
+    if (n.nodeType !== 1) return;
+    if (n.matches(SKETCH_SEL)) sketchify(n);
+    if (n.querySelectorAll) n.querySelectorAll(SKETCH_SEL).forEach(sketchify);
+  }))).observe(document.body, { childList: true, subtree: true });
+}
+
+/* =========================================================
    Routing and start-up
    ========================================================= */
 function route() {
@@ -1084,6 +1520,8 @@ function init() {
   buildBubbleButtons();
   buildToolbar();
   buildCustomize();
+  setupPhotoEditor();
+  setupSketch();
   layout();
   goTo(0, true);
   draftReady = loadDraft().then(() => goTo(cur, true));
@@ -1108,11 +1546,18 @@ function init() {
   window.addEventListener('pagehide', saveDraft);
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { $('#lightbox').hidden = true; closeSheet(); blurBubbles(); return; }
+    if (e.key === 'Escape' && !$('#photoModal').hidden) { closePhotoEditor(); return; }
+    if (e.key === 'Escape' && !$('#cameraModal').hidden) { closeCamera(); return; }
+    if (e.key === 'Escape') { $('#lightbox').hidden = true; closeSheet(); blurBubbles(); cancelPaste(); clearSelection(); return; }
     if (drawScreen.hidden) return;
     const typing = e.target.closest('input, textarea, [contenteditable]');
     if (typing) return;
     const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'c') { if (copySelection(false)) e.preventDefault(); return; }
+    if (mod && e.key.toLowerCase() === 'x') { if (copySelection(true)) e.preventDefault(); return; }
+    if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClip(); return; }
+    if (e.key === 'Enter' && piece) { e.preventDefault(); commitPaste(); return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); return; }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
