@@ -1,4 +1,9 @@
 @font-face {
+  font-family: "Nirvanna";
+  src: url("fonts/Nirvanna.otf") format("opentype");
+  font-weight: normal; font-style: normal; font-display: swap;
+}
+@font-face {
   font-family: "Garamondt";
   src: url("fonts/Garamondt-Regular.woff") format("woff");
   font-weight: normal; font-style: normal; font-display: swap;
@@ -15,8 +20,8 @@
   --muted: #6f6a61;
   --soft: #e7e1d4;
   --accent: #ff5a3c;
-  --hand: "Garamondt", Garamond, Georgia, serif;
-  --ui: "Garamondt", Garamond, Georgia, serif;
+  --hand: "Nirvanna", "Garamondt", Garamond, Georgia, serif;
+  --ui: "Nirvanna", "Garamondt", Garamond, Georgia, serif;
   --canvas: 560px;
   --page-h: 700px;
   --head-h: 100px;
