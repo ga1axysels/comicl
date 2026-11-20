@@ -21,10 +21,10 @@ const PROMPTS = [
 ];
 
 const PANEL_META = [
-  { label: 'Set the scene', key: 'scene' },
-  { label: 'Show the problem', key: 'problem' },
-  { label: 'Cook something up.' },
-  { label: 'End off the comic.' },
+  { label: 'let\'s set the scene', key: 'scene' },
+  { label: 'draw the prompt', key: 'problem' },
+  { label: 'your turn; what happens next.' },
+  { label: 'your turn - how does it end' },
 ];
 
 // Bubble shapes, drawn in a 100x100 box that stretches to the bubble's size.
@@ -214,6 +214,7 @@ function buildPages() {
         </header>
         <div class="work">
           <div class="frame">
+            <div class="photos"></div>
             <canvas class="art" width="${RES}" height="${RES}"></canvas>
             <canvas class="live" width="${RES}" height="${RES}"></canvas>
             <div class="layer"></div>
@@ -227,10 +228,10 @@ function buildPages() {
     const art = $('.art', page), live = $('.live', page);
     const p = {
       i, page, art, live,
-      frame: $('.frame', page), layer: $('.layer', page), slot: $('.tool-slot', page),
+      frame: $('.frame', page), layer: $('.layer', page), slot: $('.tool-slot', page), photoLayer: $('.photos', page),
       actx: art.getContext('2d', { willReadFrequently: true }),
       lctx: live.getContext('2d'),
-      bubbles: [], hist: [], hi: -1, dirty: true, url: null,
+      bubbles: [], photos: [], hist: [], hi: -1, dirty: true, url: null,
     };
     attachDrawing(p);
     $('.done-btn', page).addEventListener('click', onDone);
@@ -341,7 +342,11 @@ function attachDrawing(p) {
     blurBubbles();
     if (piece) { commitPaste(); return; }        // tapping away places a pasted piece
     const pt = toCanvas(e, c);
-    if (tool === 'select') { startSelect(p, c, e, pt); return; }
+    if (tool === 'select') {
+      const hit = hitPhoto(p, pt);
+      if (hit >= 0) { liftPhoto(p, hit, e); return; }
+      startSelect(p, c, e, pt); return;
+    }
     clearSelection();
     if (tool === 'fill') { floodFill(p, pt); pushHist(p); return; }
     c.setPointerCapture(e.pointerId);
@@ -431,7 +436,7 @@ function floodFill(p, pt) {
 }
 
 /* ---------- undo / redo ---------- */
-function snap(p) { return { img: p.actx.getImageData(0, 0, RES, RES), b: JSON.stringify(p.bubbles) }; }
+function snap(p) { return { img: p.actx.getImageData(0, 0, RES, RES), b: JSON.stringify(p.bubbles), ph: JSON.stringify(p.photos) }; }
 function pushHist(p, silent) {
   p.hist = p.hist.slice(0, p.hi + 1);
   p.hist.push(snap(p));
@@ -443,7 +448,8 @@ function pushHist(p, silent) {
 function restore(p, s) {
   p.actx.putImageData(s.img, 0, 0);
   p.bubbles = JSON.parse(s.b);
-  renderBubbles(p);
+  p.photos = JSON.parse(s.ph || '[]');
+  renderBubbles(p); renderPhotos(p);
   p.dirty = true; scheduleSave(); updateUndo();
 }
 function undo() { if (piece) { cancelPaste(); return; } clearSelection(); const p = panels[cur]; blurBubbles(); if (p.hi > 0) restore(p, p.hist[--p.hi]); }
@@ -461,7 +467,9 @@ function clearPanel() {
   cancelPaste(); clearSelection();
   const p = panels[cur];
   p.actx.clearRect(0, 0, RES, RES);
-  p.bubbles = []; renderBubbles(p); pushHist(p);
+  p.bubbles = []; renderBubbles(p);
+  p.photos = []; renderPhotos(p);
+  pushHist(p);
 }
 
 /* =========================================================
@@ -579,13 +587,16 @@ function floatPiece(cl, x, y, w, h, keepRatio) {
   node.appendChild(clipPreview(clip));
   node.insertAdjacentHTML('beforeend',
     ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(d => `<span class="rz rz-${d}" data-dir="${d}" aria-hidden="true"></span>`).join('') +
-    '<div class="sel-bar"><button class="pp-place" data-a="place">Place ✓</button><button data-a="cancel" aria-label="Cancel paste">×</button></div>');
+    (clip.photo
+      ? '<div class="sel-bar"><button class="pp-place" data-a="place">Place ✓</button><button data-a="delete">Delete</button></div>'
+      : '<div class="sel-bar"><button class="pp-place" data-a="place">Place ✓</button><button data-a="cancel" aria-label="Cancel paste">×</button></div>'));
   piece = { p, clip, x, y, w, h, el: node, ratio: keepRatio ? w / h : 0 };
   placePiece();
   p.frame.appendChild(node);
   $('.sel-bar', node).addEventListener('pointerdown', e => e.stopPropagation());
   $('[data-a=place]', node).addEventListener('click', commitPaste);
-  $('[data-a=cancel]', node).addEventListener('click', cancelPaste);
+  if (clip.photo) $('[data-a=delete]', node).addEventListener('click', deletePiece);
+  else $('[data-a=cancel]', node).addEventListener('click', cancelPaste);
 
   node.addEventListener('pointerdown', e => {
     if (!piece || e.button > 0) return;
@@ -619,6 +630,14 @@ function floatPiece(cl, x, y, w, h, keepRatio) {
 function commitPaste() {
   if (!piece) return;
   const { p, clip: cl, x, y, w, h } = piece;
+  if (cl.photo) { // photos stay their own object so they can be moved later
+    const pid = cl.pid || registerPhoto(cl.canvas);
+    const ph = { pid, x, y, w, h };
+    if (cl.orig) p.photos.splice(Math.min(cl.orig.idx, p.photos.length), 0, ph); else p.photos.push(ph);
+    piece.el.remove(); piece = null;
+    renderPhotos(p); pushHist(p);
+    return;
+  }
   p.actx.drawImage(cl.canvas, x / 100 * RES, y / 100 * RES, w / 100 * RES, h / 100 * RES);
   cl.bubbles.forEach(cb => {
     const b = { id: bid++, seed: cb.seed, type: cb.type, text: cb.text, flip: cb.flip,
@@ -629,7 +648,67 @@ function commitPaste() {
   piece.el.remove(); piece = null;
   renderBubbles(p); pushHist(p);
 }
-function cancelPaste() { if (piece) { piece.el.remove(); piece = null; } }
+function cancelPaste() {
+  if (!piece) return;
+  const { p, clip: cl } = piece;
+  piece.el.remove(); piece = null;
+  if (cl.photo && cl.orig) { // a picked-up photo goes back where it was
+    const { idx, x, y, w, h } = cl.orig;
+    p.photos.splice(Math.min(idx, p.photos.length), 0, { pid: cl.pid, x, y, w, h });
+    renderPhotos(p);
+  }
+}
+function deletePiece() {
+  if (!piece) return;
+  const { p, clip: cl } = piece;
+  piece.el.remove(); piece = null;
+  if (cl.orig) pushHist(p); // it was already on the panel, so this is an undoable change
+}
+
+/* ---------- placed photos ---------- */
+const photoReg = new Map(); // id -> { canvas, url }
+let photoN = 1;
+function registerPhoto(canvas, url) {
+  const pid = 'ph' + Date.now().toString(36) + (photoN++);
+  photoReg.set(pid, { canvas, url: url || null });
+  return pid;
+}
+function photoUrl(pid) {
+  const r = photoReg.get(pid); if (!r) return null;
+  if (!r.url) r.url = r.canvas.toDataURL('image/webp', 0.85); // keeps see-through parts; falls back to PNG
+  return r.url;
+}
+function renderPhotos(p) {
+  p.photoLayer.innerHTML = '';
+  p.photos.forEach(ph => {
+    const r = photoReg.get(ph.pid); if (!r) return;
+    Object.assign(r.canvas.style, { left: ph.x + '%', top: ph.y + '%', width: ph.w + '%', height: ph.h + '%' });
+    p.photoLayer.appendChild(r.canvas);
+  });
+}
+// Which photo (top-most) is under this point? Ignores see-through parts.
+function hitPhoto(p, pt) {
+  const X = pct(pt.x), Y = pct(pt.y);
+  for (let i = p.photos.length - 1; i >= 0; i--) {
+    const ph = p.photos[i];
+    if (X < ph.x || X > ph.x + ph.w || Y < ph.y || Y > ph.y + ph.h) continue;
+    const c = photoReg.get(ph.pid) && photoReg.get(ph.pid).canvas; if (!c) continue;
+    const u = clamp(Math.floor((X - ph.x) / ph.w * c.width), 0, c.width - 1), v = clamp(Math.floor((Y - ph.y) / ph.h * c.height), 0, c.height - 1);
+    if (c.getContext('2d').getImageData(u, v, 1, 1).data[3] > 10) return i;
+  }
+  return -1;
+}
+function liftPhoto(p, idx, e) {
+  const ph = p.photos[idx], r = photoReg.get(ph.pid);
+  p.photos.splice(idx, 1);
+  renderPhotos(p);
+  floatPiece({ canvas: r.canvas, bubbles: [], photo: true, pid: ph.pid, orig: { idx, x: ph.x, y: ph.y, w: ph.w, h: ph.h }, x: 0, y: 0, w: ph.w, h: ph.h },
+    ph.x, ph.y, ph.w, ph.h, true);
+  // keep dragging with the same finger / mouse press
+  try {
+    piece.el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: true, button: 0, buttons: 1, clientX: e.clientX, clientY: e.clientY }));
+  } catch (err) {}
+}
 
 function updatePasteBtn() { $('#pasteBtn').disabled = !clip; }
 
@@ -937,7 +1016,7 @@ function closeSheet() {
    ========================================================= */
 const draftKey = () => 'comicle:draft:' + today.key;
 const isBlank = p => {
-  if (p.bubbles.length) return false;
+  if (p.bubbles.length || p.photos.length) return false;
   const d = p.actx.getImageData(0, 0, RES, RES).data;
   for (let i = 3; i < d.length; i += 16) if (d[i]) return false;
   return true;
@@ -947,12 +1026,24 @@ async function loadDraft() {
   // drop old days' drafts
   store.keys().forEach(k => { if (k.startsWith('comicle:draft:') && k !== draftKey()) store.del(k); });
   const d = store.get(draftKey());
+  if (d && d.photoData) {
+    await Promise.all(Object.entries(d.photoData).map(async ([pid, url]) => {
+      try {
+        const im = await loadImg(url);
+        const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight;
+        c.getContext('2d').drawImage(im, 0, 0);
+        photoReg.set(pid, { canvas: c, url });
+      } catch (e) {}
+    }));
+  }
   if (d && Array.isArray(d.panels)) {
     await Promise.all(panels.map(async (p, i) => {
       const s = d.panels[i]; if (!s) return;
       p.bubbles = Array.isArray(s.bubbles) ? s.bubbles : [];
       p.bubbles.forEach(b => { bid = Math.max(bid, (b.id | 0) + 1); });
       renderBubbles(p);
+      p.photos = Array.isArray(s.photos) ? s.photos.filter(ph => photoReg.has(ph.pid)) : [];
+      renderPhotos(p);
       if (s.img) {
         try { const im = await loadImg(s.img); p.actx.drawImage(im, 0, 0, RES, RES); p.url = s.img; p.dirty = false; } catch (e) {}
       }
@@ -972,7 +1063,7 @@ function panelDataUrl(p) {
   return c.toDataURL('image/jpeg', 0.9);
 }
 
-let saveT;
+let saveT, saveWarned = false;
 function scheduleSave() { clearTimeout(saveT); saveT = setTimeout(saveDraft, 500); }
 function saveDraft() {
   if (!ready || loadComic(today.key)) return;
@@ -980,10 +1071,15 @@ function saveDraft() {
     cur,
     panels: panels.map(p => {
       if (p.dirty) { p.url = isBlank(p) ? null : panelDataUrl(p); p.dirty = false; }
-      return { img: p.url, bubbles: p.bubbles };
+      return { img: p.url, bubbles: p.bubbles, photos: p.photos };
     }),
+    photoData: {},
   };
-  store.set(draftKey(), data);
+  panels.forEach(p => p.photos.forEach(ph => { const u = photoUrl(ph.pid); if (u) data.photoData[ph.pid] = u; }));
+  if (!store.set(draftKey(), data) && !saveWarned) {
+    saveWarned = true;
+    toast('This comic is too big to save on this device. Finish it before closing the page.');
+  }
 }
 
 /* finished comics */
@@ -1049,8 +1145,9 @@ function composite(p, S) {
   const c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d');
   x.fillStyle = '#fff'; x.fillRect(0, 0, S, S);
-  x.drawImage(p.art, 0, 0, S, S);
   x.save(); x.beginPath(); x.rect(0, 0, S, S); x.clip();
+  p.photos.forEach(ph => { const r = photoReg.get(ph.pid); if (r) x.drawImage(r.canvas, ph.x / 100 * S, ph.y / 100 * S, ph.w / 100 * S, ph.h / 100 * S); });
+  x.drawImage(p.art, 0, 0, S, S);
   p.bubbles.forEach(b => drawBubble(x, b, S));
   x.restore();
   return c;
@@ -1324,7 +1421,7 @@ function setPeTool(t) {
   $$('[data-pe-tool]').forEach(b => b.classList.toggle('on', b.dataset.peTool === t));
 }
 
-function closePhotoEditor() { $('#photoModal').hidden = true; pe.hist = []; }
+function closePhotoEditor() { $('#photoModal').hidden = true; $('#peCursor').hidden = true; pe.hist = []; }
 
 function peStroke(from, to) {
   const x = pe.ctx, r = pe.canvas.width / pe.canvas.getBoundingClientRect().width;
@@ -1339,9 +1436,27 @@ function peStroke(from, to) {
 function setupPhotoEditor() {
   const cv = $('#peCanvas');
   const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; };
+  const ring = $('#peCursor');
+  const showRing = (cx, cy) => {
+    const st = $('#peStage').getBoundingClientRect();
+    ring.hidden = false;
+    ring.style.width = ring.style.height = pe.size + 'px';
+    ring.style.left = (cx - st.left) + 'px'; ring.style.top = (cy - st.top) + 'px';
+    ring.classList.toggle('restore', pe.tool === 'restore');
+  };
+  let ringT;
+  cv.addEventListener('pointermove', e => showRing(e.clientX, e.clientY));
+  cv.addEventListener('pointerenter', e => showRing(e.clientX, e.clientY));
+  cv.addEventListener('pointerleave', () => { if (!pe.drawing) ring.hidden = true; });
+  $('#peSize').addEventListener('input', () => { // preview the size in the middle of the photo
+    const r = cv.getBoundingClientRect();
+    showRing(r.left + r.width / 2, r.top + r.height / 2);
+    clearTimeout(ringT); ringT = setTimeout(() => { ring.hidden = true; }, 900);
+  });
   cv.addEventListener('pointerdown', e => {
     e.preventDefault(); cv.setPointerCapture(e.pointerId);
-    const p0 = pt(e); pe.drawing = p0; peStroke(p0, p0);
+    showRing(e.clientX, e.clientY);
+    const p0 = pt(e); pe.drawing = p0; pe.pointerType = e.pointerType; peStroke(p0, p0);
   });
   cv.addEventListener('pointermove', e => {
     if (!pe.drawing) return;
@@ -1350,6 +1465,7 @@ function setupPhotoEditor() {
   const end = () => {
     if (!pe.drawing) return;
     pe.drawing = null;
+    if (pe.pointerType === 'touch') $('#peCursor').hidden = true;
     pe.hist.push(pe.ctx.getImageData(0, 0, cv.width, cv.height));
     if (pe.hist.length > 15) pe.hist.splice(1, 1); // always keep the original first
     $('#peUndo').disabled = pe.hist.length < 2;
@@ -1401,8 +1517,8 @@ function addPhotoToPanel() {
   closePhotoEditor();
   const ratio = cv.width / cv.height, big = 70;
   const w = ratio >= 1 ? big : big * ratio, h = ratio >= 1 ? big / ratio : big;
-  floatPiece({ canvas: cv, bubbles: [], x: 0, y: 0, w, h, from: -1 }, (100 - w) / 2, (100 - h) / 2, w, h, true);
-  toast('Move or resize the photo, then press Place.');
+  floatPiece({ canvas: cv, bubbles: [], photo: true, x: 0, y: 0, w, h, from: -1 }, (100 - w) / 2, (100 - h) / 2, w, h, true);
+  toast('Move or resize the photo, then press Place. To move it later, use Select and tap the photo.');
 }
 
 /* desktop camera */

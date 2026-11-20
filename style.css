@@ -493,3 +493,19 @@ body.is-mobile .toast { bottom: 84px; }
 .btn.sk, .title-card.sk { box-shadow: none; }
 .tool-slot:not(:has(.toolbar)) > .sk-svg { display: none; }
 .tool-slot .toolbar { border-color: transparent; }
+
+/* placed photos sit under the drawing */
+.frame .photos { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.frame .photos canvas { position: absolute; inset: auto; }
+/* brush ring in the photo editor */
+.pe-stage { position: relative; }
+#peCanvas { cursor: none; }
+.pe-cursor {
+  position: absolute; pointer-events: none; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--ink); box-shadow: 0 0 0 1.5px #fff, inset 0 0 0 1.5px #fff;
+}
+.pe-cursor.restore { border-color: var(--accent); }
+/* let the sketchy border sit outside the photo window without adding a scrollbar */
+.modal { overflow-y: auto; place-items: safe center; }
+.modal-card { overflow: visible; max-height: none; }
