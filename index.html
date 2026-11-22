@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Comicle</title>
 <meta name="description" content="Daily doodle: 4 panels, finish the comic.">
-<link rel="preload" href="fonts/Nirvanna.otf" as="font" type="font/otf" crossorigin>
-<link rel="preload" href="fonts/Garamondt-Regular.woff" as="font" type="font/woff" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Reenie+Beanie&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,6 +15,7 @@
 <!-- ============ HOME ============ -->
 <section id="home" class="screen">
   <div class="squiggles" id="squiggles" aria-hidden="true"></div>
+  <button class="btn btn-ghost free-btn free-home" id="freeHome" aria-label="Freehand: draw four panels with no prompt"><svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.4L16 4.8l3.2 3.2L8.4 18.8z"/><path d="M14 7l3 3"/></svg>Freehand</button>
   <main class="home-inner">
     <h1 class="logo">comicle</h1>
     <p class="tagline">daily doodle</p>
@@ -34,7 +36,7 @@
 <section id="draw" class="screen" hidden>
   <div class="draw-top" id="drawTop">
     <button class="logo logo-small" id="drawLogo" aria-label="Go to home">comicle</button>
-    <div class="dots" id="dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="top-mid"><span class="mode-tag">Freehand</span><div class="dots" id="dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
     <button id="backBtn" class="btn btn-ghost back-btn" aria-label="Go back to the previous panel">
       <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Back
     </button>
@@ -114,7 +116,10 @@
 <section id="result" class="screen" hidden>
   <header class="res-top">
     <button class="logo logo-small" id="resLogo" aria-label="Go to home">comicle</button>
-    <span class="res-meta" id="resMeta"></span>
+    <div class="res-top-right">
+      <span class="res-meta" id="resMeta"></span>
+      <button class="btn btn-ghost free-btn free-result" id="freeResult" aria-label="Freehand: draw four panels with no prompt"><svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.4L16 4.8l3.2 3.2L8.4 18.8z"/><path d="M14 7l3 3"/></svg>Freehand</button>
+    </div>
   </header>
 
   <div class="res-main">

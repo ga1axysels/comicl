@@ -120,6 +120,7 @@ let tool = 'brush', color = INK, hsv = rgbToHsv(hexToRgb(INK)), size = 10, opaci
 let bid = 1;
 let draftReady, ready = false;
 let comic = null; // comic shown on the result screen
+let mode = 'daily'; // 'daily' (today's prompt) or 'free' (freehand, no prompt)
 
 /* =========================================================
    Screens
@@ -137,7 +138,7 @@ function showHome() {
   show('home');
   homeScreen.style.opacity = '';
   const done = loadComic(today.key);
-  $('#startBtn').textContent = done ? "See today's comic" : (store.get(draftKey()) ? 'Keep drawing' : 'Start');
+  $('#startBtn').textContent = done ? "See today's comic" : (store.get(dailyDraftKey()) ? 'Keep drawing' : 'Start');
   $('#homeRecent').hidden = !listKeys().length;
 }
 
@@ -156,15 +157,20 @@ function buildHome() {
 }
 
 let starting = false;
-async function startDrawing() {
+async function startDrawing(m = 'daily', src = $('#titleCard')) {
   if (starting) return;
-  const done = loadComic(today.key);
-  if (done) { showResult(done, true); return; }
+  if (m === 'daily') {
+    const done = loadComic(today.key);
+    if (done) { showResult(done, true); return; }
+  }
   starting = true;
   await draftReady;
+  await setMode(m);
 
-  const card = $('#titleCard');
+  const card = src;
+  const leaving = resultScreen.hidden ? homeScreen : resultScreen;
   const from = card.getBoundingClientRect();
+  const fromR = getComputedStyle(card).borderTopLeftRadius || '14px';
 
   // Lay out the drawing screen invisibly so we know where panel 1 sits.
   drawScreen.hidden = false;
@@ -174,25 +180,27 @@ async function startDrawing() {
   const to = panels[cur].frame.getBoundingClientRect();
 
   const ghost = el('div', 'morph');
-  ghost.appendChild(card.firstElementChild.cloneNode(true));
+  const inner = card.id === 'titleCard' ? card.firstElementChild.cloneNode(true) : el('span', 'morph-label', card.textContent.trim());
+  ghost.appendChild(inner);
   document.body.appendChild(ghost);
   card.style.visibility = 'hidden';
 
   const g = 1.08, gw = from.width * g, gh = from.height * g;
   const box = (l, t, w, h, r) => ({ left: l + 'px', top: t + 'px', width: w + 'px', height: h + 'px', borderRadius: r });
   const morph = ghost.animate([
-    { ...box(from.left, from.top, from.width, from.height, '14px'), easing: 'cubic-bezier(.3,.7,.4,1)' },
-    { ...box(from.left - (gw - from.width) / 2, from.top - (gh - from.height) / 2, gw, gh, '14px'), offset: 0.28, easing: 'cubic-bezier(.65,0,.35,1)' },
+    { ...box(from.left, from.top, from.width, from.height, fromR), easing: 'cubic-bezier(.3,.7,.4,1)' },
+    { ...box(from.left - (gw - from.width) / 2, from.top - (gh - from.height) / 2, gw, gh, fromR), offset: 0.28, easing: 'cubic-bezier(.65,0,.35,1)' },
     box(to.left, to.top, to.width, to.height, '2px'),
   ], { duration: 1100, fill: 'forwards' });
   ghost.firstElementChild.animate([{ opacity: 1 }, { opacity: 1, offset: 0.3 }, { opacity: 0, offset: 0.7 }, { opacity: 0 }], { duration: 1100, fill: 'forwards' });
-  homeScreen.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 500, delay: 150, fill: 'forwards' });
+  leaving.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 500, delay: 150, fill: 'forwards' });
 
   await morph.finished;
   drawScreen.style.visibility = '';
   drawScreen.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 350, easing: 'ease' });
-  homeScreen.getAnimations().forEach(a => a.cancel());
-  homeScreen.hidden = true;
+  leaving.getAnimations().forEach(a => a.cancel());
+  homeScreen.hidden = true; resultScreen.hidden = true;
+  history.replaceState(null, '', location.pathname + location.search);
   card.style.visibility = '';
   await ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 350 }).finished;
   ghost.remove();
@@ -209,7 +217,7 @@ function buildPages() {
     page.innerHTML = `
       <div class="page-inner">
         <header class="page-head">
-          <h2><span class="pn">Panel ${i + 1}:</span> ${m.label}</h2>
+          <h2><span class="pn">Panel ${i + 1}<span class="pn-colon">:</span></span> <span class="plabel">${m.label}</span></h2>
           ${m.key ? '<p class="desc"></p>' : ''}
         </header>
         <div class="work">
@@ -237,6 +245,25 @@ function buildPages() {
     $('.done-btn', page).addEventListener('click', onDone);
     return p;
   });
+}
+
+// Switch between today's prompt and freehand: save this one, clear the panels, load the other.
+// fresh = true starts blank panels without saving what's there (used right after finishing a freehand comic)
+async function setMode(m, fresh = false) {
+  if (m === mode && !fresh) return;
+  if (ready && !fresh) saveDraft();
+  ready = false;
+  cancelPaste(); clearSelection(); blurBubbles();
+  mode = m;
+  document.body.classList.toggle('free', m === 'free');
+  panels.forEach(p => {
+    p.actx.clearRect(0, 0, RES, RES); p.lctx.clearRect(0, 0, RES, RES);
+    p.bubbles = []; p.photos = []; renderBubbles(p); renderPhotos(p);
+    p.hist = []; p.hi = -1; p.dirty = true; p.url = null;
+  });
+  cur = 0;
+  if (fresh) store.del(draftKey());
+  await loadDraft();
 }
 
 function layout() {
@@ -1014,7 +1041,9 @@ function closeSheet() {
 /* =========================================================
    Saving your progress (this device)
    ========================================================= */
-const draftKey = () => 'comicle:draft:' + today.key;
+const FREE_DRAFT = 'comicle:draft:free';
+const dailyDraftKey = () => 'comicle:draft:' + today.key;
+const draftKey = () => (mode === 'free' ? FREE_DRAFT : dailyDraftKey());
 const isBlank = p => {
   if (p.bubbles.length || p.photos.length) return false;
   const d = p.actx.getImageData(0, 0, RES, RES).data;
@@ -1024,7 +1053,7 @@ const isBlank = p => {
 
 async function loadDraft() {
   // drop old days' drafts
-  store.keys().forEach(k => { if (k.startsWith('comicle:draft:') && k !== draftKey()) store.del(k); });
+  store.keys().forEach(k => { if (k.startsWith('comicle:draft:') && k !== dailyDraftKey() && k !== FREE_DRAFT) store.del(k); });
   const d = store.get(draftKey());
   if (d && d.photoData) {
     await Promise.all(Object.entries(d.photoData).map(async ([pid, url]) => {
@@ -1066,7 +1095,7 @@ function panelDataUrl(p) {
 let saveT, saveWarned = false;
 function scheduleSave() { clearTimeout(saveT); saveT = setTimeout(saveDraft, 500); }
 function saveDraft() {
-  if (!ready || loadComic(today.key)) return;
+  if (!ready || (mode === 'daily' && loadComic(today.key))) return;
   const data = {
     cur,
     panels: panels.map(p => {
@@ -1129,7 +1158,7 @@ function drawBubble(x, b, S) {
   x.lineWidth = Math.max(1.6, S * 0.0045); x.strokeStyle = INK; x.lineJoin = 'round'; x.lineCap = 'round'; x.stroke(ink);
   if (!b.text) return;
   const fs = S * bubbleFont(b) / 100, lh = fs * 1.15;
-  x.font = `${fs}px "Nirvanna", "Garamondt", Georgia, serif`;
+  x.font = `${fs}px "Reenie Beanie", cursive`;
   x.fillStyle = INK; x.textAlign = 'center'; x.textBaseline = 'middle';
   const il = b.flip ? s.inset[2] : s.inset[0], ir = b.flip ? s.inset[0] : s.inset[2];
   const L = bx + bw * il / 100, T = by + bh * s.inset[1] / 100;
@@ -1157,19 +1186,23 @@ async function finish() {
   commitPaste(); clearSelection();
   blurBubbles();
   try { await document.fonts.ready; } catch (e) {}
+  const free = mode === 'free';
   const c = {
-    key: today.key, n: today.n,
-    promptTitle: today.prompt.title, title: today.prompt.title,
+    key: free ? 'free-' + Date.now().toString(36) : today.key,
+    n: free ? null : today.n, free, date: today.key,
+    promptTitle: free ? 'Freehand' : today.prompt.title, title: free ? 'Freehand' : today.prompt.title,
     by: store.get('comicle:name') || '',
     border: '#ffffff', layout: 'vertical',
     panels: panels.map(p => composite(p, 720).toDataURL('image/jpeg', 0.88)),
     created: Date.now(),
   };
   saveComic(c);
+  clearTimeout(saveT); ready = false; // stop a pending autosave from bringing the finished draft back
   store.del(draftKey());
   await drawScreen.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }).finished;
   drawScreen.getAnimations().forEach(a => a.cancel());
   showResult(c, true);
+  if (c.free) setMode('free', true); // next freehand comic starts blank
 }
 
 function applyStrip(c) {
@@ -1211,7 +1244,8 @@ async function showResult(c, dispense) {
   comic = c;
   show('result');
   history.replaceState(null, '', '#/comic/' + c.key);
-  $('#resMeta').textContent = `Comicle #${c.n} · ${fmtDate(c.key)}`;
+  $('#resMeta').textContent = c.free ? `Freehand · ${fmtDate(c.date || today.key)}` : `Comicle #${c.n} · ${fmtDate(c.key)}`;
+  showFreeCorner();
   $('#stripTitle').value = c.title;
   $('#byInput').value = c.by || '';
   $('#customPanel').hidden = true;
@@ -1239,6 +1273,13 @@ async function showResult(c, dispense) {
     strip.classList.add('out');
     after.classList.add('show'); side.classList.add('show');
   }
+}
+
+// Finished page: the freehand button pops into the top-right corner.
+function showFreeCorner() {
+  const b = $('#freeResult');
+  b.classList.remove('pop'); void b.offsetWidth;
+  setTimeout(() => b.classList.add('pop'), 900);
 }
 
 function openLightbox(src, k) {
@@ -1291,11 +1332,12 @@ function renderRecent() {
   grid.before(note);
   listKeys().map(loadComic).filter(Boolean).forEach(c => {
     const card = el('button', 'rc' + (comic && c.key === comic.key ? ' current' : ''));
-    card.innerHTML = `<div class="rc-strip">${c.panels.map((s, k) => `<img alt="" src="${s}">`).join('')}</div>
+    card.innerHTML = `<div class="rc-strip">${c.panels.map((s, k) => `<img alt="" src="${s}">`).join('')}${c.free ? '<span class="rc-tag">Freehand</span>' : ''}</div>
       <div class="rc-title"></div><div class="rc-meta"></div>`;
+    if (c.free) card.classList.add('is-free');
     $('.rc-strip', card).style.background = c.border;
     $('.rc-title', card).textContent = c.title;
-    $('.rc-meta', card).textContent = `#${c.n} · ${fmtDate(c.key)}${c.by ? ' · by ' + c.by : ''}`;
+    $('.rc-meta', card).textContent = `${c.free ? 'Freehand' : '#' + c.n} · ${fmtDate(c.date || c.key)}${c.by ? ' · by ' + c.by : ''}`;
     card.addEventListener('click', () => showResult(c, true));
     grid.appendChild(card);
   });
@@ -1316,8 +1358,8 @@ async function stripCanvas(c) {
   x.fillStyle = c.border; x.fillRect(0, 0, W, H);
 
   x.fillStyle = ink; x.textAlign = 'center'; x.textBaseline = 'middle';
-  let fs = 60; x.font = `${fs}px "Nirvanna", "Garamondt", Georgia, serif`;
-  while (x.measureText(c.title).width > W - PAD * 2 && fs > 28) { fs -= 2; x.font = `${fs}px "Nirvanna", "Garamondt", Georgia, serif`; }
+  let fs = 60; x.font = `${fs}px "Reenie Beanie", cursive`;
+  while (x.measureText(c.title).width > W - PAD * 2 && fs > 28) { fs -= 2; x.font = `${fs}px "Reenie Beanie", cursive`; }
   x.fillText(c.title, W / 2, PAD + TITLE / 2 - 10);
 
   imgs.forEach((im, k) => {
@@ -1329,10 +1371,10 @@ async function stripCanvas(c) {
   });
 
   const yb = PAD + TITLE + rows * PS + (rows - 1) * GAP + BY / 2 + 4;
-  x.fillStyle = ink; x.textAlign = 'left'; x.font = '38px "Nirvanna", "Garamondt", Georgia, serif';
+  x.fillStyle = ink; x.textAlign = 'left'; x.font = '38px "Reenie Beanie", cursive';
   x.fillText('by ' + (c.by || 'anonymous'), PAD, yb);
-  x.textAlign = 'right'; x.globalAlpha = 0.6; x.font = '28px "Nirvanna", "Garamondt", Georgia, serif';
-  x.fillText(`comicle #${c.n}`, W - PAD, yb);
+  x.textAlign = 'right'; x.globalAlpha = 0.6; x.font = '28px "Reenie Beanie", cursive';
+  x.fillText(c.free ? 'comicle freehand' : `comicle #${c.n}`, W - PAD, yb);
   x.globalAlpha = 1;
   return cv;
 }
@@ -1342,16 +1384,16 @@ const shareUrl = c => location.href.split('#')[0] + '#/comic/' + c.key;
 async function download(c) {
   const blob = await toBlob(await stripCanvas(c));
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `comicle-${c.n}.png`;
+  a.href = URL.createObjectURL(blob); a.download = c.free ? `comicle-freehand-${c.date || ''}.png` : `comicle-${c.n}.png`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 }
 
 async function shareImage(c, fallback) {
   const blob = await toBlob(await stripCanvas(c));
-  const file = new File([blob], `comicle-${c.n}.png`, { type: 'image/png' });
+  const file = new File([blob], c.free ? 'comicle-freehand.png' : `comicle-${c.n}.png`, { type: 'image/png' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: c.title, text: `My Comicle #${c.n}: ${c.title}` }); } catch (e) {}
+    try { await navigator.share({ files: [file], title: c.title, text: c.free ? `My freehand Comicle: ${c.title}` : `My Comicle #${c.n}: ${c.title}` }); } catch (e) {}
     return;
   }
   fallback();
@@ -1369,7 +1411,7 @@ async function onShare(kind) {
   }
   if (kind === 'messages') {
     await shareImage(c, () => {
-      const body = encodeURIComponent(`I finished today's Comicle: "${c.title}" ${shareUrl(c)}`);
+      const body = encodeURIComponent(`${c.free ? 'I made a freehand Comicle' : "I finished today's Comicle"}: "${c.title}" ${shareUrl(c)}`);
       location.href = `sms:&body=${body}`;
     });
   }
@@ -1615,7 +1657,7 @@ function setupSketch() {
    Routing and start-up
    ========================================================= */
 function route() {
-  const m = location.hash.match(/^#\/comic\/(\d{4}-\d{2}-\d{2})$/);
+  const m = location.hash.match(/^#\/comic\/([\w-]+)$/);
   if (m) {
     const c = loadComic(m[1]);
     if (c) { showResult(c, true); return; }
@@ -1625,6 +1667,7 @@ function route() {
 }
 
 function goHome() {
+  if (starting) return;
   blurBubbles(); saveDraft();
   showHome();
   homeScreen.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300 });
@@ -1642,8 +1685,10 @@ function init() {
   goTo(0, true);
   draftReady = loadDraft().then(() => goTo(cur, true));
 
-  $('#startBtn').addEventListener('click', startDrawing);
-  $('#titleCard').addEventListener('click', startDrawing);
+  $('#startBtn').addEventListener('click', () => startDrawing('daily'));
+  $('#titleCard').addEventListener('click', () => startDrawing('daily'));
+  $('#freeHome').addEventListener('click', () => startDrawing('free', $('#freeHome')));
+  $('#freeResult').addEventListener('click', () => startDrawing('free', $('#freeResult')));
   $('#homeRecent').addEventListener('click', () => { const c = loadComic(listKeys()[0]); if (c) showResult(c, true); });
   $('#backBtn').addEventListener('click', () => goTo(cur - 1));
   $('#mDone').addEventListener('click', onDone);
