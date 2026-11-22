@@ -56,7 +56,7 @@ const pad2 = n => String(n).padStart(2, '0');
 const dateKey = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const keyToDate = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
 const fmtDate = k => keyToDate(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+const loadImg = src => new Promise((res, rej) => { const i = new Image(); if (/^https?:/.test(src)) i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = rej; i.src = src; });
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 
 const store = {
@@ -129,8 +129,9 @@ function show(name) {
   homeScreen.hidden = name !== 'home';
   drawScreen.hidden = name !== 'draw';
   resultScreen.hidden = name !== 'result';
+  $('#galleryScreen').hidden = name !== 'gallery';
   closeSheet();
-  if (name !== 'result') history.replaceState(null, '', location.pathname + location.search);
+  if (name === 'home' || name === 'draw') history.replaceState(null, '', location.pathname + location.search);
   window.scrollTo(0, 0);
 }
 
@@ -139,7 +140,7 @@ function showHome() {
   homeScreen.style.opacity = '';
   const done = loadComic(today.key);
   $('#startBtn').textContent = done ? "See today's comic" : (store.get(dailyDraftKey()) ? 'Keep drawing' : 'Start');
-  $('#homeRecent').hidden = !listKeys().length;
+  $('#homeRecent').hidden = false;
 }
 
 /* ---------- home ---------- */
@@ -1125,7 +1126,11 @@ function saveComic(c) {
   store.set('comicle:list', list);
 }
 let comicSaveT;
-function saveComicSoon() { clearTimeout(comicSaveT); comicSaveT = setTimeout(() => comic && saveComic(comic), 300); }
+function saveComicSoon() {
+  if (!comic || comic.viewOnly) return;
+  clearTimeout(comicSaveT);
+  comicSaveT = setTimeout(() => { saveComic(comic); pushRemoteSoon(comic); }, 300);
+}
 
 /* =========================================================
    Finish: build the strip and dispense it
@@ -1203,6 +1208,14 @@ async function finish() {
   drawScreen.getAnimations().forEach(a => a.cancel());
   showResult(c, true);
   if (c.free) setMode('free', true); // next freehand comic starts blank
+  publishComic(c).then(id => {
+    if (comic !== c) return;
+    history.replaceState(null, '', '#/c/' + id);
+    updatePosted(); renderGallery(gTab);
+    toast('Posted to the gallery.');
+  })
+    .catch(() => { if (comic === c) updatePosted(); });
+  updatePosted();
 }
 
 function applyStrip(c) {
@@ -1243,12 +1256,17 @@ function fitStrip() {
 async function showResult(c, dispense) {
   comic = c;
   show('result');
-  history.replaceState(null, '', '#/comic/' + c.key);
-  $('#resMeta').textContent = c.free ? `Freehand · ${fmtDate(c.date || today.key)}` : `Comicle #${c.n} · ${fmtDate(c.key)}`;
+  const rid = c.viewOnly ? c.remoteId : (c.remote && c.remote.id);
+  history.replaceState(null, '', rid ? '#/c/' + rid : '#/comic/' + c.key);
+  $('#resMeta').textContent = c.free ? `Freehand · ${fmtDate(c.date || today.key)}` : `Comicle #${c.n} · ${fmtDate(c.date || c.key)}`;
   showFreeCorner();
   $('#stripTitle').value = c.title;
-  $('#byInput').value = c.by || '';
+  $('#byInput').value = c.viewOnly ? (c.by || 'anonymous') : (c.by || '');
+  $('#stripTitle').readOnly = $('#byInput').readOnly = !!c.viewOnly;
+  $('#customizeBtn').hidden = !!c.viewOnly;
   $('#customPanel').hidden = true;
+  resultScreen.classList.toggle('view-only', !!c.viewOnly);
+  updatePosted();
   const sp = $('#stripPanels'); sp.innerHTML = '';
   c.panels.forEach((src, k) => {
     const b = el('button', 'sp', `<img alt="Panel ${k + 1}" src="${src}">`);
@@ -1256,7 +1274,8 @@ async function showResult(c, dispense) {
     b.addEventListener('click', () => openLightbox(src, k));
     sp.appendChild(b);
   });
-  renderRecent();
+  $('#resAfter').appendChild($('#gallery'));
+  renderGallery(c.free ? 'free' : (gTab === 'mine' ? 'mine' : 'today'));
   applyStrip(c);
 
   const strip = $('#strip'), after = $('#resAfter');
@@ -1323,24 +1342,142 @@ function buildCustomize() {
   by.addEventListener('keydown', e => { if (e.key === 'Enter') by.blur(); });
 }
 
-/* ---------- recent comics ---------- */
-function renderRecent() {
-  const grid = $('#recentGrid');
-  grid.innerHTML = '';
-  const note = $('.recent-note') || el('p', 'recent-note');
-  note.textContent = 'Comics made on this device. Everyone else\'s comics will show up here once sharing is set up.';
-  grid.before(note);
-  listKeys().map(loadComic).filter(Boolean).forEach(c => {
-    const card = el('button', 'rc' + (comic && c.key === comic.key ? ' current' : ''));
-    card.innerHTML = `<div class="rc-strip">${c.panels.map((s, k) => `<img alt="" src="${s}">`).join('')}${c.free ? '<span class="rc-tag">Freehand</span>' : ''}</div>
-      <div class="rc-title"></div><div class="rc-meta"></div>`;
-    if (c.free) card.classList.add('is-free');
-    $('.rc-strip', card).style.background = c.border;
-    $('.rc-title', card).textContent = c.title;
-    $('.rc-meta', card).textContent = `${c.free ? 'Freehand' : '#' + c.n} · ${fmtDate(c.date || c.key)}${c.by ? ' · by ' + c.by : ''}`;
-    card.addEventListener('click', () => showResult(c, true));
-    grid.appendChild(card);
-  });
+/* ---------- online: post, update, remove, report ---------- */
+const API = '/api/comics';
+async function apiJson(url, opts = {}) {
+  const r = await fetch(url, opts.body ? { ...opts, headers: { 'Content-Type': 'application/json' } } : opts);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+const publishing = new Map();
+function publishComic(c) {
+  if (c.viewOnly) return Promise.resolve(c.remoteId);
+  if (c.remote) return Promise.resolve(c.remote.id);
+  if (publishing.has(c.key)) return publishing.get(c.key);
+  const job = apiJson(API, { method: 'POST', body: JSON.stringify({
+    free: !!c.free, date: c.date || c.key, n: c.n, promptTitle: c.promptTitle,
+    title: c.title, by: c.by, border: c.border, layout: c.layout, panels: c.panels,
+  }) }).then(out => {
+    c.remote = { id: out.id, token: out.token };
+    saveComic(c);
+    return out.id;
+  }).finally(() => publishing.delete(c.key));
+  publishing.set(c.key, job);
+  return job;
+}
+let pushT;
+function pushRemoteSoon(c) {
+  if (!c.remote) return;
+  clearTimeout(pushT);
+  pushT = setTimeout(() => apiJson(`${API}?id=${c.remote.id}`, { method: 'PUT', body: JSON.stringify({
+    token: c.remote.token, title: c.title, by: c.by, border: c.border, layout: c.layout,
+  }) }).catch(() => {}), 700);
+}
+async function unpublishComic(c) {
+  await apiJson(`${API}?id=${c.remote.id}`, { method: 'DELETE', body: JSON.stringify({ token: c.remote.token }) });
+  c.remote = null; saveComic(c);
+}
+
+// The line under the share buttons: is this comic in the public gallery?
+function updatePosted() {
+  const box = $('#posted'), c = comic;
+  if (!c) return;
+  box.innerHTML = '';
+  const btn = (label, fn) => { const b = el('button', 'link-btn', label); b.addEventListener('click', fn); return b; };
+  if (c.viewOnly) {
+    box.append(btn('Report this comic', async () => {
+      if (!confirm('Report this comic? It will be hidden from the gallery.')) return;
+      try { await apiJson('/api/report', { method: 'POST', body: JSON.stringify({ id: c.remoteId }) }); toast('Thanks. The comic is hidden.'); location.hash = '#/gallery'; }
+      catch (e) { toast("Couldn't send the report. Try again."); }
+    }));
+  } else if (publishing.has(c.key)) {
+    box.append(el('span', null, 'Posting to the gallery…'));
+  } else if (c.remote) {
+    box.append(el('span', null, 'In the public gallery · '), btn('Remove', async () => {
+      if (!confirm('Remove this comic from the public gallery? Your copy stays on this device.')) return;
+      try { await unpublishComic(c); toast('Removed from the gallery.'); showResult(c, false); }
+      catch (e) { toast("Couldn't remove it. Try again."); }
+    }));
+  } else {
+    box.append(el('span', null, 'Not in the gallery yet · '), btn('Post it', async () => {
+      try { await publishComic(c); toast('Posted to the gallery.'); showResult(c, false); }
+      catch (e) { toast("Couldn't post it. Check your connection and try again."); }
+    }));
+  }
+}
+
+const remoteToComic = m => ({
+  key: 'c-' + m.id, remoteId: m.id, viewOnly: true, free: !!m.free, n: m.n, date: m.date,
+  title: m.title, promptTitle: m.promptTitle, by: m.by, border: m.border, layout: m.layout, panels: m.panels,
+});
+
+async function openRemote(id) {
+  const own = listKeys().map(loadComic).find(c => c && c.remote && c.remote.id === id);
+  if (own) { showResult(own, true); return; }
+  try { showResult(remoteToComic(await apiJson(`${API}?id=${encodeURIComponent(id)}`)), true); }
+  catch (e) { toast("Couldn't find that comic. It may have been removed."); showHome(); }
+}
+
+/* ---------- gallery ---------- */
+let gTab = 'today', gCursor = null, gLoading = false, gRun = 0;
+
+function galleryCard(c, onClick) {
+  const isCurrent = comic && (c.key === comic.key || (c.remoteId && (c.remoteId === comic.remoteId || (comic.remote && c.remoteId === comic.remote.id))));
+  const card = el('button', 'rc' + (isCurrent ? ' current' : '') + (c.free ? ' is-free' : ''));
+  card.innerHTML = `<div class="rc-strip">${c.panels.map(s => `<img alt="" loading="lazy" src="${s}">`).join('')}${c.free ? '<span class="rc-tag">Freehand</span>' : ''}</div>
+    <div class="rc-title"></div><div class="rc-meta"></div>`;
+  $('.rc-strip', card).style.background = c.border;
+  $('.rc-title', card).textContent = c.title;
+  $('.rc-meta', card).textContent = `${c.free ? 'Freehand' : '#' + c.n} · ${fmtDate(c.date || c.key)}${c.by ? ' · by ' + c.by : ''}`;
+  card.addEventListener('click', onClick);
+  return card;
+}
+
+function renderGallery(tab = gTab) {
+  gTab = tab; gCursor = null; gRun++;
+  $$('.g-tab').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-selected', b.dataset.tab === tab); });
+  const grid = $('#recentGrid'), note = $('#galleryNote');
+  grid.innerHTML = ''; $('#galleryMore').hidden = true;
+  if (tab === 'mine') {
+    const mine = listKeys().map(loadComic).filter(Boolean);
+    note.textContent = mine.length ? 'Comics you made on this device.' : "You haven't finished a comic on this device yet.";
+    mine.forEach(c => grid.appendChild(galleryCard(c, () => showResult(c, true))));
+    return;
+  }
+  if (tab === 'today' && !loadComic(today.key)) {
+    note.textContent = `Finish today's comic ("${today.prompt.title}") to see how everyone else ended it.`;
+    return;
+  }
+  note.textContent = 'Loading…';
+  loadGalleryPage();
+}
+
+async function loadGalleryPage() {
+  if (gLoading) return;
+  gLoading = true;
+  const run = gRun, tab = gTab;
+  const url = (tab === 'free' ? `${API}?kind=free` : `${API}?kind=daily&date=${today.key}`) + (gCursor ? '&cursor=' + encodeURIComponent(gCursor) : '');
+  try {
+    const out = await apiJson(url);
+    if (run !== gRun) return;
+    const grid = $('#recentGrid');
+    out.items.forEach(m => grid.appendChild(galleryCard(remoteToComic(m), () => { location.hash = '#/c/' + m.id; })));
+    gCursor = out.cursor;
+    $('#galleryMore').hidden = !gCursor;
+    $('#galleryNote').textContent = grid.children.length
+      ? (tab === 'free' ? 'Freehand comics from everyone.' : `Everyone's endings for "${today.prompt.title}".`)
+      : (tab === 'free' ? 'No freehand comics yet. Make the first one!' : "No one has posted today's comic yet. Check back soon!");
+  } catch (e) {
+    if (run === gRun) $('#galleryNote').textContent = "Couldn't load the gallery right now.";
+  } finally {
+    gLoading = false;
+  }
+}
+
+function showGallery() {
+  show('gallery');
+  $('#galleryScreen .gal-slot').appendChild($('#gallery'));
+  renderGallery(gTab);
 }
 
 /* ---------- sharing ---------- */
@@ -1379,7 +1516,12 @@ async function stripCanvas(c) {
   return cv;
 }
 const toBlob = cv => new Promise(r => cv.toBlob(r, 'image/png'));
-const shareUrl = c => location.href.split('#')[0] + '#/comic/' + c.key;
+const linkFor = id => location.href.split('#')[0] + '#/c/' + id;
+// Make sure the comic is online, then return its link (null if posting failed).
+async function getShareLink(c) {
+  try { return linkFor(await publishComic(c)); }
+  catch (e) { toast("Couldn't post your comic, so there's no link yet. Check your connection and try again."); return null; }
+}
 
 async function download(c) {
   const blob = await toBlob(await stripCanvas(c));
@@ -1403,17 +1545,20 @@ async function onShare(kind) {
   const c = comic; if (!c) return;
   if (kind === 'download') { await download(c); toast('Comic saved as an image.'); }
   if (kind === 'link') {
-    try { await navigator.clipboard.writeText(shareUrl(c)); toast('Link copied.'); }
-    catch (e) { prompt('Copy this link:', shareUrl(c)); }
+    const url = await getShareLink(c); if (!url) return;
+    try { await navigator.clipboard.writeText(url); toast('Link copied. Anyone with it can see your comic.'); }
+    catch (e) { prompt('Copy this link:', url); }
+    updatePosted();
   }
   if (kind === 'instagram') {
     await shareImage(c, async () => { await download(c); toast('Image saved. Post it from Instagram.'); });
   }
   if (kind === 'messages') {
-    await shareImage(c, () => {
-      const body = encodeURIComponent(`${c.free ? 'I made a freehand Comicle' : "I finished today's Comicle"}: "${c.title}" ${shareUrl(c)}`);
-      location.href = `sms:&body=${body}`;
-    });
+    const url = await getShareLink(c); if (!url) return;
+    updatePosted();
+    const text = `${c.free ? 'I made a freehand Comicle' : "I finished today's Comicle"}: "${c.title}"`;
+    if (navigator.share) { try { await navigator.share({ title: c.title, text, url }); } catch (e) {} return; }
+    location.href = `sms:&body=${encodeURIComponent(text + ' ' + url)}`;
   }
 }
 
@@ -1657,6 +1802,9 @@ function setupSketch() {
    Routing and start-up
    ========================================================= */
 function route() {
+  if (location.hash === '#/gallery') { showGallery(); return; }
+  const rc = location.hash.match(/^#\/c\/([a-z0-9-]+)$/);
+  if (rc) { openRemote(rc[1]); return; }
   const m = location.hash.match(/^#\/comic\/([\w-]+)$/);
   if (m) {
     const c = loadComic(m[1]);
@@ -1689,7 +1837,10 @@ function init() {
   $('#titleCard').addEventListener('click', () => startDrawing('daily'));
   $('#freeHome').addEventListener('click', () => startDrawing('free', $('#freeHome')));
   $('#freeResult').addEventListener('click', () => startDrawing('free', $('#freeResult')));
-  $('#homeRecent').addEventListener('click', () => { const c = loadComic(listKeys()[0]); if (c) showResult(c, true); });
+  $('#homeRecent').addEventListener('click', () => { location.hash = '#/gallery'; });
+  $('#galLogo').addEventListener('click', goHome);
+  $$('.g-tab').forEach(b => b.addEventListener('click', () => renderGallery(b.dataset.tab)));
+  $('#galleryMore').addEventListener('click', loadGalleryPage);
   $('#backBtn').addEventListener('click', () => goTo(cur - 1));
   $('#mDone').addEventListener('click', onDone);
   $('#addonsBtn').addEventListener('click', openSheet);

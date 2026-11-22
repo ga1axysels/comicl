@@ -28,7 +28,7 @@
         <span class="tc-hint">today's comic</span>
       </div>
     </div>
-    <button id="homeRecent" class="link-btn" hidden>View recent comics</button>
+    <button id="homeRecent" class="link-btn" hidden>Gallery</button>
   </main>
 </section>
 
@@ -161,17 +161,33 @@
         <button class="btn btn-ghost" data-share="instagram">Instagram</button>
         <button class="btn btn-ghost" data-share="messages">Messages</button>
       </div>
+      <p class="posted" id="posted"></p>
     </div>
 
     </div>
   </div>
 
   <div class="res-after" id="resAfter">
-    <section class="recent">
-      <h2>View recent comics</h2>
+    <section class="recent" id="gallery">
+      <h2>Gallery</h2>
+      <div class="g-tabs" role="tablist">
+        <button class="g-tab on" data-tab="today" role="tab">Today's endings</button>
+        <button class="g-tab" data-tab="free" role="tab">Freehand</button>
+        <button class="g-tab" data-tab="mine" role="tab">Yours</button>
+      </div>
+      <p class="recent-note" id="galleryNote"></p>
       <div class="recent-grid" id="recentGrid"></div>
+      <button class="btn btn-ghost g-more" id="galleryMore" hidden>Load more</button>
     </section>
   </div>
+</section>
+
+<!-- ============ GALLERY ============ -->
+<section id="galleryScreen" class="screen" hidden>
+  <header class="res-top">
+    <button class="logo logo-small" id="galLogo" aria-label="Go to home">comicle</button>
+  </header>
+  <div class="gal-slot"></div>
 </section>
 
 <div class="modal" id="photoModal" hidden>

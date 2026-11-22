@@ -538,3 +538,21 @@ body.free .pn { color: var(--ink); }
   .res-top-right { gap: 8px; }
   .res-top-right .res-meta { display: none; }
 }
+
+/* gallery */
+#galleryScreen { min-height: 100vh; padding: 18px 16px 64px; }
+#galleryScreen .recent { margin-top: 18px; border-top: 0; padding-top: 0; }
+.g-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.g-tab {
+  font-family: var(--hand); font-size: 20px; padding: 4px 16px; border-radius: 999px;
+  border: 2px solid var(--ink); background: #fff;
+}
+.g-tab.on { background: var(--ink); color: #fff; }
+.g-more { display: block; margin: 20px auto 0; }
+.posted { margin: 4px 0 0; font-size: 16px; color: var(--muted); }
+.posted .link-btn { margin: 0; padding: 0; font-size: 16px; }
+.res-side .posted { text-align: center; }
+.view-only .strip-title, .view-only .strip-by input { cursor: default; }
+.view-only .strip-title:hover { border-bottom-color: transparent; }
+.view-only .strip-by input { border-bottom-style: solid; border-bottom-color: transparent; }
+#galleryScreen .res-top { max-width: 1100px; }
