@@ -1345,10 +1345,18 @@ function buildCustomize() {
 /* ---------- online: post, update, remove, report ---------- */
 const API = '/api/comics';
 async function apiJson(url, opts = {}) {
-  const r = await fetch(url, opts.body ? { ...opts, headers: { 'Content-Type': 'application/json' } } : opts);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  let r;
+  try { r = await fetch(url, opts.body ? { ...opts, headers: { 'Content-Type': 'application/json' } } : opts); }
+  catch (e) { throw new Error('no connection to the server'); }
+  if (!r.ok) {
+    let msg = '';
+    try { msg = (await r.json()).error || ''; } catch (e) {}
+    if ([404, 405, 501].includes(r.status) && !msg) msg = 'the gallery server is not set up yet';
+    throw new Error(msg || 'error ' + r.status);
+  }
   return r.json();
 }
+const whyFailed = e => (e && e.message ? ` (${e.message})` : '');
 const publishing = new Map();
 function publishComic(c) {
   if (c.viewOnly) return Promise.resolve(c.remoteId);
@@ -1380,9 +1388,13 @@ async function unpublishComic(c) {
 
 // The line under the share buttons: is this comic in the public gallery?
 function updatePosted() {
-  const box = $('#posted'), c = comic;
+  const box = $('#posted'), c = comic, pb = $('#postBtn');
   if (!c) return;
   box.innerHTML = '';
+  const pending = publishing.has(c.key);
+  pb.hidden = !!(c.viewOnly || c.remote) && !pending;
+  pb.disabled = pending;
+  pb.textContent = pending ? 'Posting…' : 'Post to gallery';
   const btn = (label, fn) => { const b = el('button', 'link-btn', label); b.addEventListener('click', fn); return b; };
   if (c.viewOnly) {
     box.append(btn('Report this comic', async () => {
@@ -1390,8 +1402,8 @@ function updatePosted() {
       try { await apiJson('/api/report', { method: 'POST', body: JSON.stringify({ id: c.remoteId }) }); toast('Thanks. The comic is hidden.'); location.hash = '#/gallery'; }
       catch (e) { toast("Couldn't send the report. Try again."); }
     }));
-  } else if (publishing.has(c.key)) {
-    box.append(el('span', null, 'Posting to the gallery…'));
+  } else if (pending) {
+    // the button says Posting…
   } else if (c.remote) {
     box.append(el('span', null, 'In the public gallery · '), btn('Remove', async () => {
       if (!confirm('Remove this comic from the public gallery? Your copy stays on this device.')) return;
@@ -1399,11 +1411,17 @@ function updatePosted() {
       catch (e) { toast("Couldn't remove it. Try again."); }
     }));
   } else {
-    box.append(el('span', null, 'Not in the gallery yet · '), btn('Post it', async () => {
-      try { await publishComic(c); toast('Posted to the gallery.'); showResult(c, false); }
-      catch (e) { toast("Couldn't post it. Check your connection and try again."); }
-    }));
+    box.append(el('span', null, 'Only on this device for now.'));
   }
+}
+
+async function postCurrent() {
+  const c = comic;
+  if (!c || c.viewOnly || c.remote) return;
+  const job = publishComic(c);
+  updatePosted();
+  try { await job; toast('Posted to the gallery.'); if (comic === c) showResult(c, false); }
+  catch (e) { toast("Couldn't post it" + whyFailed(e) + '.'); if (comic === c) updatePosted(); }
 }
 
 const remoteToComic = m => ({
@@ -1452,26 +1470,59 @@ function renderGallery(tab = gTab) {
   loadGalleryPage();
 }
 
+// Your own comics for a tab (freehand, or today's prompt), straight from this device.
+function localFor(tab) {
+  return listKeys().map(loadComic).filter(Boolean)
+    .filter(c => (tab === 'free' ? c.free : (!c.free && (c.date || c.key) === today.key)));
+}
+const ownCard = c => {
+  const card = galleryCard(c, () => showResult(c, true));
+  if (!c.remote) $('.rc-meta', card).textContent += ' · only on this device';
+  return card;
+};
+let gShown = new Set();
+
 async function loadGalleryPage() {
   if (gLoading) return;
   gLoading = true;
-  const run = gRun, tab = gTab;
+  const run = gRun, tab = gTab, first = !gCursor;
+  if (first) gShown = new Set();
+  const locals = localFor(tab);
+  const mineById = new Map(locals.filter(c => c.remote).map(c => [c.remote.id, c]));
   const url = (tab === 'free' ? `${API}?kind=free` : `${API}?kind=daily&date=${today.key}`) + (gCursor ? '&cursor=' + encodeURIComponent(gCursor) : '');
-  try {
-    const out = await apiJson(url);
-    if (run !== gRun) return;
-    const grid = $('#recentGrid');
-    out.items.forEach(m => grid.appendChild(galleryCard(remoteToComic(m), () => { location.hash = '#/c/' + m.id; })));
-    gCursor = out.cursor;
-    $('#galleryMore').hidden = !gCursor;
-    $('#galleryNote').textContent = grid.children.length
-      ? (tab === 'free' ? 'Freehand comics from everyone.' : `Everyone's endings for "${today.prompt.title}".`)
-      : (tab === 'free' ? 'No freehand comics yet. Make the first one!' : "No one has posted today's comic yet. Check back soon!");
-  } catch (e) {
-    if (run === gRun) $('#galleryNote').textContent = "Couldn't load the gallery right now.";
-  } finally {
-    gLoading = false;
+  let out = null;
+  try { out = await apiJson(url); } catch (e) { out = null; }
+  if (run !== gRun) { gLoading = false; return; }
+  const grid = $('#recentGrid');
+  const entries = [];
+  (out ? out.items : []).forEach(m => {
+    const mine = mineById.get(m.id);
+    const key = mine ? mine.key : 'r:' + m.id;
+    if (gShown.has(key)) return;
+    gShown.add(key);
+    entries.push({ t: m.created || 0, card: mine ? ownCard(mine) : galleryCard(remoteToComic(m), () => { location.hash = '#/c/' + m.id; }) });
+  });
+  // your own comics that weren't in this page from the server (not posted yet, or older than this page)
+  if (first) {
+    locals.forEach(c => {
+      if (gShown.has(c.key)) return;
+      if (c.remote && out && out.cursor) return; // posted ones further down will come with a later page
+      gShown.add(c.key);
+      entries.push({ t: c.created || 0, card: ownCard(c) });
+    });
   }
+  if (!out || !out.cursor) {
+    locals.forEach(c => { if (!gShown.has(c.key)) { gShown.add(c.key); entries.push({ t: c.created || 0, card: ownCard(c) }); } });
+  }
+  entries.sort((a, b) => b.t - a.t).forEach(e => grid.appendChild(e.card));
+  gCursor = out ? out.cursor : null;
+  $('#galleryMore').hidden = !gCursor;
+  const note = $('#galleryNote');
+  if (!out) note.textContent = grid.children.length ? "Showing your comics. Couldn't load everyone else's right now." : "Couldn't load the gallery right now.";
+  else note.textContent = grid.children.length
+    ? (tab === 'free' ? 'Freehand comics from everyone, including yours.' : `Everyone's endings for "${today.prompt.title}".`)
+    : (tab === 'free' ? 'No freehand comics yet. Make the first one!' : "No one has posted today's comic yet. Check back soon!");
+  gLoading = false;
 }
 
 function showGallery() {
@@ -1520,7 +1571,7 @@ const linkFor = id => location.href.split('#')[0] + '#/c/' + id;
 // Make sure the comic is online, then return its link (null if posting failed).
 async function getShareLink(c) {
   try { return linkFor(await publishComic(c)); }
-  catch (e) { toast("Couldn't post your comic, so there's no link yet. Check your connection and try again."); return null; }
+  catch (e) { toast("Couldn't post your comic, so there's no link yet" + whyFailed(e) + '.'); updatePosted(); return null; }
 }
 
 async function download(c) {
@@ -1841,6 +1892,7 @@ function init() {
   $('#galLogo').addEventListener('click', goHome);
   $$('.g-tab').forEach(b => b.addEventListener('click', () => renderGallery(b.dataset.tab)));
   $('#galleryMore').addEventListener('click', loadGalleryPage);
+  $('#postBtn').addEventListener('click', postCurrent);
   $('#backBtn').addEventListener('click', () => goTo(cur - 1));
   $('#mDone').addEventListener('click', onDone);
   $('#addonsBtn').addEventListener('click', openSheet);

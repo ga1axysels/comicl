@@ -16,6 +16,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: 'server error' });
+    const msg = String((e && e.message) || '');
+    // say plainly when storage isn't hooked up, since that's the usual setup problem
+    const hint = /token|BLOB_READ_WRITE/i.test(msg) ? 'storage is not connected to this project' : msg.slice(0, 160);
+    return res.status(500).json({ error: 'server error: ' + hint });
   }
 }
