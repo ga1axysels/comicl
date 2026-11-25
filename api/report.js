@@ -1,12 +1,14 @@
 // POST /api/report  { id }
 // Hides a comic from the gallery right away. The comic is moved into the hidden/ folder of
 // your Blob store (not deleted), so you can look at it in the Vercel dashboard and move it back.
-import { put, del, readMeta, readBody, metaPath } from './_store.js';
+import { put, del, readMeta, readBody, metaPath, okId, tooMany } from './_store.js';
 
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
     const { id } = readBody(req);
+    if (!okId(String(id || ''))) return res.status(400).json({ error: 'not a comic id' });
+    if (tooMany(req, res, 'report', 10, 10 * 6e4)) return;
     const found = await readMeta(String(id || ''));
     if (!found || !found.meta) return res.status(404).json({ error: 'not found' });
     await put('hidden/' + metaPath(found.meta.id), JSON.stringify({ ...found.meta, reported: Date.now() }), {

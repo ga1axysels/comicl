@@ -7,6 +7,7 @@
 import {
   put, list, del, sha, clean, COLOR, DATE, newId, newToken,
   metaPath, readJsonBlob, readMeta, writeMeta, publicView, readBody,
+  okDate, okId, okCursor, onlyParams, tooMany,
 } from './_store.js';
 
 const MAX_PANEL = 700000; // characters of base64 per panel image (~500 KB)
@@ -16,18 +17,28 @@ export default async function handler(req, res) {
   try {
     const q = req.query || {};
 
+    const bad = msg => res.status(400).json({ error: msg });
+
     if (req.method === 'GET') {
-      if (q.id) {
+      if (q.id !== undefined) {
+        if (!onlyParams(q, ['id'])) return bad('unexpected settings');
+        if (!okId(String(q.id))) return bad('not a comic id');
+        if (tooMany(req, res, 'read', 40, 6e4)) return;
         const found = await readMeta(String(q.id));
-        if (!found || !found.meta) return res.status(404).json({ error: 'not found' });
+        if (!found || !found.meta) {
+          res.setHeader('Cache-Control', 's-maxage=60'); // asking again for the same missing comic is free
+          return res.status(404).json({ error: 'not found' });
+        }
         // Vercel's CDN keeps the answer for a minute, so a link opened by lots of people costs one storage lookup
         res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=600');
         return res.status(200).json(publicView(found.meta));
       }
       let prefix;
-      if (q.kind === 'free') prefix = 'meta/free/';
-      else if (DATE.test(q.date || '')) prefix = `meta/daily/${q.date}/`;
-      else return res.status(400).json({ error: 'need kind=free or a date' });
+      if (q.cursor !== undefined && !okCursor(String(q.cursor))) return bad('bad page marker');
+      if (q.kind === 'free' && onlyParams(q, ['kind', 'cursor'])) prefix = 'meta/free/';
+      else if (q.kind === 'daily' && onlyParams(q, ['kind', 'date', 'cursor']) && okDate(String(q.date))) prefix = `meta/daily/${q.date}/`;
+      else return bad('need kind=free, or kind=daily with a real date');
+      if (tooMany(req, res, 'read', 40, 6e4)) return;
       const out = await list({ prefix, limit: PAGE, cursor: q.cursor || undefined });
       const items = (await Promise.all(out.blobs.map(b => readJsonBlob(b.url).catch(() => null))))
         .filter(Boolean).map(publicView);
@@ -41,11 +52,13 @@ export default async function handler(req, res) {
       const b = readBody(req);
       const free = !!b.free;
       const date = String(b.date || '');
-      if (!DATE.test(date)) return res.status(400).json({ error: 'bad date' });
+      if (!onlyParams(q, [])) return bad('unexpected settings');
+      if (!okDate(date)) return bad('bad date');
       const panels = Array.isArray(b.panels) ? b.panels : [];
       if (panels.length !== 4 || !panels.every(p => typeof p === 'string' && p.startsWith('data:image/jpeg;base64,') && p.length < MAX_PANEL)) {
         return res.status(400).json({ error: 'need four JPEG panels' });
       }
+      if (tooMany(req, res, 'post', 6, 10 * 6e4)) return; // 6 comics per 10 minutes is plenty for one person
       const id = newId(free, date);
       const token = newToken();
       const urls = await Promise.all(panels.map((p, k) =>
@@ -70,6 +83,9 @@ export default async function handler(req, res) {
 
     if (req.method === 'PUT' || req.method === 'DELETE') {
       const b = readBody(req);
+      if (!onlyParams(q, ['id']) || !okId(String(q.id || ''))) return bad('not a comic id');
+      if (typeof b.token !== 'string' || !/^[0-9a-f]{36}$/.test(b.token)) return res.status(403).json({ error: 'not your comic' });
+      if (tooMany(req, res, 'edit', 60, 6e4)) return;
       const found = await readMeta(String(q.id || ''));
       if (!found || !found.meta) return res.status(404).json({ error: 'not found' });
       const meta = found.meta;
