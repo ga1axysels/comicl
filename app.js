@@ -1471,10 +1471,6 @@ function renderGallery(tab = gTab) {
     mine.forEach(c => grid.appendChild(galleryCard(c, () => showResult(c, true))));
     return;
   }
-  if (tab === 'today' && !loadComic(today.key)) {
-    note.textContent = `Finish today's comic ("${today.prompt.title}") to see how everyone else ended it.`;
-    return;
-  }
   note.textContent = 'Loading…';
   loadGalleryPage();
 }
