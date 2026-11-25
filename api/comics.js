@@ -20,7 +20,8 @@ export default async function handler(req, res) {
       if (q.id) {
         const found = await readMeta(String(q.id));
         if (!found || !found.meta) return res.status(404).json({ error: 'not found' });
-        res.setHeader('Cache-Control', 'no-store');
+        // Vercel's CDN keeps the answer for a minute, so a link opened by lots of people costs one storage lookup
+        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=600');
         return res.status(200).json(publicView(found.meta));
       }
       let prefix;
@@ -30,7 +31,9 @@ export default async function handler(req, res) {
       const out = await list({ prefix, limit: PAGE, cursor: q.cursor || undefined });
       const items = (await Promise.all(out.blobs.map(b => readJsonBlob(b.url).catch(() => null))))
         .filter(Boolean).map(publicView);
-      res.setHeader('Cache-Control', 'no-store'); // removed comics disappear right away
+      // cached on Vercel's CDN for 30s, so a busy gallery costs one storage lookup per 30s instead of one per visit.
+      // Removed comics are also filtered out in the browser, so a cached list never shows them for long.
+      res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=300');
       return res.status(200).json({ items, cursor: out.hasMore ? out.cursor : null });
     }
 
