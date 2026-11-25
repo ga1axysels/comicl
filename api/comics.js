@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       const out = await list({ prefix, limit: PAGE, cursor: q.cursor || undefined });
       const items = (await Promise.all(out.blobs.map(b => readJsonBlob(b.url).catch(() => null))))
         .filter(Boolean).map(publicView);
-      res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=60');
+      res.setHeader('Cache-Control', 'no-store'); // removed comics disappear right away
       return res.status(200).json({ items, cursor: out.hasMore ? out.cursor : null });
     }
 

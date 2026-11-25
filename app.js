@@ -1381,8 +1381,16 @@ function pushRemoteSoon(c) {
     token: c.remote.token, title: c.title, by: c.by, border: c.border, layout: c.layout,
   }) }).catch(() => {}), 700);
 }
+// ids you removed from the gallery, so a slow-to-update listing never shows them again
+const removedIds = () => new Set(store.get('comicle:removed') || []);
+function rememberRemoved(id) {
+  const ids = [...removedIds(), id].slice(-200);
+  store.set('comicle:removed', ids);
+}
 async function unpublishComic(c) {
-  await apiJson(`${API}?id=${c.remote.id}`, { method: 'DELETE', body: JSON.stringify({ token: c.remote.token }) });
+  const id = c.remote.id;
+  await apiJson(`${API}?id=${id}`, { method: 'DELETE', body: JSON.stringify({ token: c.remote.token }) });
+  rememberRemoved(id);
   c.remote = null; saveComic(c);
 }
 
@@ -1394,7 +1402,8 @@ function updatePosted() {
   const pending = publishing.has(c.key);
   pb.hidden = !!(c.viewOnly || c.remote) && !pending;
   pb.disabled = pending;
-  pb.textContent = pending ? 'Posting…' : 'Post to gallery';
+  // change only the label span, so the hand-drawn outline inside the button stays
+  $('.pb-label', pb).textContent = pending ? 'Posting…' : 'Post to gallery';
   const btn = (label, fn) => { const b = el('button', 'link-btn', label); b.addEventListener('click', fn); return b; };
   if (c.viewOnly) {
     box.append(btn('Report this comic', async () => {
@@ -1477,7 +1486,14 @@ function localFor(tab) {
 }
 const ownCard = c => {
   const card = galleryCard(c, () => showResult(c, true));
-  if (!c.remote) $('.rc-meta', card).textContent += ' · only on this device';
+  card.classList.add('mine');
+  $('.rc-meta', card).textContent += c.remote ? ' · made by you' : ' · made by you · not posted';
+  return card;
+};
+// someone else's comic: if its pictures are gone (it was removed), drop the card
+const otherCard = m => {
+  const card = galleryCard(remoteToComic(m), () => { location.hash = '#/c/' + m.id; });
+  card.querySelectorAll('img').forEach(img => img.addEventListener('error', () => card.remove(), { once: true }));
   return card;
 };
 let gShown = new Set();
@@ -1489,6 +1505,7 @@ async function loadGalleryPage() {
   if (first) gShown = new Set();
   const locals = localFor(tab);
   const mineById = new Map(locals.filter(c => c.remote).map(c => [c.remote.id, c]));
+  const gone = removedIds();
   const url = (tab === 'free' ? `${API}?kind=free` : `${API}?kind=daily&date=${today.key}`) + (gCursor ? '&cursor=' + encodeURIComponent(gCursor) : '');
   let out = null;
   try { out = await apiJson(url); } catch (e) { out = null; }
@@ -1496,11 +1513,12 @@ async function loadGalleryPage() {
   const grid = $('#recentGrid');
   const entries = [];
   (out ? out.items : []).forEach(m => {
+    if (gone.has(m.id)) return;
     const mine = mineById.get(m.id);
     const key = mine ? mine.key : 'r:' + m.id;
     if (gShown.has(key)) return;
     gShown.add(key);
-    entries.push({ t: m.created || 0, card: mine ? ownCard(mine) : galleryCard(remoteToComic(m), () => { location.hash = '#/c/' + m.id; }) });
+    entries.push({ t: m.created || 0, card: mine ? ownCard(mine) : otherCard(m) });
   });
   // your own comics that weren't in this page from the server (not posted yet, or older than this page)
   if (first) {
