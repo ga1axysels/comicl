@@ -568,3 +568,8 @@ body.free .pn { color: var(--ink); }
 /* bigger labels need wider tool buttons in the side toolbar */
 .tool-slot .tools { grid-template-columns: repeat(2, 1fr); }
 .tool-slot .tool { flex-direction: row; justify-content: center; gap: 6px; padding: 5px 0; }
+
+/* hand-drawn pencil beside the home logo */
+.home-logo { position: relative; }
+/* hangs off the right so the word itself stays centred */
+.logo-pencil { position: absolute; left: 100%; bottom: .02em; margin-left: .06em; height: .9em; width: auto; transform: rotate(8deg); pointer-events: none; }
